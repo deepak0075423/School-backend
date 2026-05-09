@@ -1,4 +1,5 @@
 'use strict';
+if (typeof globalThis.crypto === 'undefined') globalThis.crypto = require('crypto').webcrypto;
 require('dotenv').config();
 const express  = require('express');
 const cors     = require('cors');
