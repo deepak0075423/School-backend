@@ -15,7 +15,7 @@ const docCtrl        = require('../../controllers/document.controller');
 const holidayCtrl    = require('../../controllers/holiday.controller');
 const { verifyToken, requireRole, requirePasswordReset } = require('../../middleware/auth');
 const requireModule  = require('../../middleware/requireModule');
-const { uploadExcel, uploadDocument, uploadCsv } = require('../../middleware/upload');
+const { uploadExcel, uploadDocument, uploadCsv, uploadLeaveDoc, uploadImage } = require('../../middleware/upload');
 const School         = require('../../models/School');
 
 const guard            = [verifyToken, requirePasswordReset, requireRole('school_admin')];
@@ -30,6 +30,10 @@ const holidayGuard     = [...guard, requireModule('holiday')];
 
 // Dashboard
 router.get('/dashboard', guard, adminCtrl.getDashboard);
+
+// School Settings
+router.get('/school-settings', guard, adminCtrl.getSchoolSettings);
+router.put('/school-settings', guard, uploadImage.single('logo'), adminCtrl.updateSchoolSettings);
 
 // Modules — returns enabled module flags for the current school
 router.get('/modules', guard, async (req, res) => {
@@ -91,9 +95,15 @@ router.get('/classes-with-sections', guard, async (req, res) => {
         const Class        = require('../../models/Class');
         const ClassSection = require('../../models/ClassSection');
         const activeYear   = await AcademicYear.findOne({ school: req.schoolId, status: 'active' }).lean();
-        if (!activeYear) return res.json({ success: true, data: [] });
-        const classes  = await Class.find({ school: req.schoolId, academicYear: activeYear._id }).sort({ classNumber: 1 }).lean();
-        const sections = await ClassSection.find({ school: req.schoolId, academicYear: activeYear._id, status: 'active' }).lean();
+        const classFilter  = { school: req.schoolId };
+        const secFilter    = { school: req.schoolId };
+        if (activeYear) {
+            classFilter.academicYear = activeYear._id;
+            secFilter.academicYear   = activeYear._id;
+            secFilter.status         = 'active';
+        }
+        const classes  = await Class.find(classFilter).sort({ classNumber: 1 }).lean();
+        const sections = await ClassSection.find(secFilter).lean();
         const secMap   = {};
         sections.forEach(s => { const k = s.class.toString(); (secMap[k] = secMap[k] || []).push(s); });
         res.json({ success: true, data: classes.map(c => ({ ...c, sections: secMap[c._id.toString()] || [] })) });
@@ -182,7 +192,7 @@ router.put('/leave/types/:id',                     leaveGuard, leaveCtrl.adminUp
 router.delete('/leave/types/:id',                  leaveGuard, leaveCtrl.adminDeleteLeaveType);
 router.put('/leave/settings',                      leaveGuard, leaveCtrl.adminUpdateLeaveSettings);
 router.get('/leave/requests',                      leaveGuard, leaveCtrl.adminGetRequests);
-router.post('/leave/requests',                     leaveGuard, leaveCtrl.adminApplyLeave);
+router.post('/leave/requests',                     leaveGuard, uploadLeaveDoc.single('document'), leaveCtrl.adminApplyLeave);
 router.get('/leave/balance',                       leaveGuard, leaveCtrl.adminGetTeacherBalance);
 router.post('/leave/requests/:id/approve',         leaveGuard, leaveCtrl.adminApproveRequest);
 router.post('/leave/requests/:id/reject',          leaveGuard, leaveCtrl.adminRejectRequest);
@@ -192,6 +202,9 @@ router.post('/leave/allocations',                  leaveGuard, leaveCtrl.adminAl
 router.get('/leave/allocations/template',          leaveGuard, leaveCtrl.adminGetAllocationTemplate);
 router.post('/leave/allocations/excel',            leaveGuard, uploadExcel.single('excelFile'), leaveCtrl.adminBulkAllocateExcel);
 router.post('/leave/allocations/carry-forward',    leaveGuard, leaveCtrl.adminRunCarryForward);
+router.post('/leave/accrual/run',                  leaveGuard, leaveCtrl.adminRunMonthlyAccrual);
+router.get('/leave/requests/export',               leaveGuard, leaveCtrl.adminExportRequests);
+router.get('/leave/allocations/export',            leaveGuard, leaveCtrl.adminExportAllocations);
 router.get('/leave/reports',                       leaveGuard, leaveCtrl.adminGetReports);
 router.get('/leave/reports/export',                leaveGuard, leaveCtrl.adminExportReports);
 

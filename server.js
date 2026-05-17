@@ -73,6 +73,7 @@ app.use('/api/parent',        require('./routes/api/parent'));
 app.use('/api/fees',          require('./routes/api/fees'));
 app.use('/api/payroll',       require('./routes/api/payroll'));
 app.use('/api/library',       require('./routes/api/library'));
+app.use('/api/chat',          require('./routes/api/chat'));
 app.use('/api/notifications', require('./routes/api/notifications'));
 app.use('/api/profile',       require('./routes/api/profile'));
 app.use('/internal',          require('./routes/api/internal'));
@@ -98,3 +99,25 @@ app.use((err, req, res, next) => {
 
 const PORT = process.env.PORT || 5000;
 app.listen(PORT, () => console.log(`Server running on port ${PORT}`));
+
+// ── Monthly Leave Accrual Scheduler ──────────────────────────────────────────
+(function scheduleMonthlyAccrual() {
+    const School     = require('./models/School');
+    const { runMonthlyAccrualForSchool } = require('./controllers/leave.controller');
+    let lastRunMonth = '';
+
+    setInterval(async () => {
+        const now        = new Date();
+        const thisMonth  = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`;
+        if (lastRunMonth === thisMonth) return;
+        lastRunMonth = thisMonth;
+        try {
+            const schools = await School.find({ 'modules.leave': true }).select('_id').lean();
+            let total = 0;
+            for (const s of schools) total += await runMonthlyAccrualForSchool(s._id);
+            if (total > 0) console.log(`[Leave] Monthly accrual: ${total} balance(s) updated across ${schools.length} school(s)`);
+        } catch (err) {
+            console.error('[Leave] Monthly accrual error:', err.message);
+        }
+    }, 60 * 60 * 1000); // check every hour; fires for real on 1st of each month
+}());
