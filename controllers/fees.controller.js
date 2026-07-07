@@ -565,13 +565,31 @@ exports.recordPayment = async (req, res) => {
 
 exports.approvePayment = async (req, res) => {
     try {
-        const payment = await FeePayment.findOneAndUpdate(
-            { _id: req.params.id, school: req.schoolId, paymentStatus: 'pending' },
-            { paymentStatus: 'completed', collectedBy: req.userId },
-            { new: true }
-        ).lean();
-        if (!payment) return res.status(404).json({ success: false, message: 'Pending payment not found' });
-        res.json({ success: true, data: payment });
+        const payment = await FeePayment.findOne({ _id: req.params.id, school: req.schoolId });
+        if (!payment) return res.status(404).json({ success: false, message: 'Payment not found' });
+        if (payment.paymentStatus !== 'pending')
+            return res.status(400).json({ success: false, message: 'Only pending payments can be approved' });
+
+        const ay            = await getActiveYear(req.schoolId);
+        const academicYear  = payment.academicYear || ay?._id;
+        const receiptNumber = await nextReceiptNumber(req.schoolId);
+        const running       = await computeRunningBalance(req.schoolId, payment.student, academicYear, -payment.amount);
+
+        const ledger = await FeeLedger.create({
+            school: req.schoolId, student: payment.student, academicYear,
+            entryType: 'credit', category: 'payment', amount: payment.amount,
+            description: `Payment received — ${receiptNumber}`,
+            referenceType: 'FeePayment', referenceId: payment._id,
+            runningBalance: running, createdBy: req.userId,
+        });
+
+        payment.paymentStatus = 'completed';
+        payment.receiptNumber = receiptNumber;
+        payment.ledgerEntry   = ledger._id;
+        payment.collectedBy   = req.userId;
+        await payment.save();
+
+        res.json({ success: true, data: payment.toObject() });
     } catch (e) { res.status(500).json({ success: false, message: e.message }); }
 };
 
