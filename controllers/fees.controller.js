@@ -746,16 +746,18 @@ exports.updateSettings = async (req, res) => {
         if (onlinePaymentEnabled !== undefined) update.onlinePaymentEnabled = !!onlinePaymentEnabled;
         if (paymentGateway       !== undefined) update.paymentGateway       = paymentGateway;
         if (razorpayKeyId        !== undefined) update.razorpayKeyId        = razorpayKeyId;
-        if (razorpayKeySecret    !== undefined) update.razorpayKeySecret    = razorpayKeySecret;
+        // '***' is the mask sent back by the form — keep the stored secret
+        if (razorpayKeySecret    !== undefined && razorpayKeySecret !== '***') update.razorpayKeySecret = razorpayKeySecret;
         if (stripePublishableKey !== undefined) update.stripePublishableKey = stripePublishableKey;
-        if (stripeSecretKey      !== undefined) update.stripeSecretKey      = stripeSecretKey;
+        if (stripeSecretKey      !== undefined && stripeSecretKey !== '***') update.stripeSecretKey = stripeSecretKey;
         if (currency             !== undefined) update.currency             = currency;
         if (currencySymbol       !== undefined) update.currencySymbol       = currencySymbol;
         if (receipt              !== undefined) update.receipt              = receipt;
         if (receiptPrefix        !== undefined) update.receiptPrefix        = receiptPrefix;
 
         const settings = await FeeSettings.findOneAndUpdate({ school: req.schoolId }, update, { upsert: true, new: true }).lean();
-        res.json({ success: true, data: settings });
+        const safe = { ...settings, razorpayKeySecret: settings.razorpayKeySecret ? '***' : '', stripeSecretKey: settings.stripeSecretKey ? '***' : '' };
+        res.json({ success: true, data: safe });
     } catch (e) { res.status(500).json({ success: false, message: e.message }); }
 };
 

@@ -29,7 +29,9 @@ exports.createAnnouncement = async (req, res) => {
 };
 exports.deleteAnnouncement = async (req, res) => {
     try {
-        await ClassAnnouncement.findByIdAndDelete(req.params.id);
+        // Announcements have no school field — authorize via the teacher's own section
+        const mySection = await ClassSection.findOne({ classTeacher: req.userId, school: req.schoolId }).lean();
+        await ClassAnnouncement.findOneAndDelete({ _id: req.params.id, section: mySection?._id });
         res.json({ success: true });
     } catch (e) { err(res, e); }
 };
@@ -44,7 +46,8 @@ exports.assignMonitor = async (req, res) => {
 };
 exports.removeMonitor = async (req, res) => {
     try {
-        await ClassMonitor.findByIdAndDelete(req.params.id);
+        const mySection = await ClassSection.findOne({ classTeacher: req.userId, school: req.schoolId }).lean();
+        await ClassMonitor.findOneAndDelete({ _id: req.params.id, section: mySection?._id });
         res.json({ success: true });
     } catch (e) { err(res, e); }
 };

@@ -114,9 +114,18 @@ exports.getMessages = async (req, res) => {
         // Skip read-tracking for admin observers (they are not members)
         if (!adminObserver) _markRead(chatId, req.userId, msgs).catch(() => {});
 
+        // Only school admins see deleted content + full edit history.
+        const isAdmin = req.userRole === 'school_admin';
+        const shaped = msgs.map(m => {
+            if (isAdmin) return m;
+            const { editHistory, ...rest } = m;
+            if (rest.isDeleted) { rest.content = ''; rest.attachments = []; }
+            return rest;
+        });
+
         res.json({
             success: true,
-            data:    msgs.reverse(),
+            data:    shaped.reverse(),
             hasMore: msgs.length >= lim,
         });
     } catch (err) {
@@ -150,7 +159,7 @@ async function _markRead(chatId, userId, msgs) {
 exports.sendMessage = async (req, res) => {
     try {
         const { chatId } = req.params;
-        const { content, type = 'text', replyTo, attachments = [], tempId } = req.body;
+        const { content, type = 'text', replyTo, attachments = [], tempId, isForwarded = false } = req.body;
 
         const hasAttachments = Array.isArray(attachments) && attachments.length > 0;
         if (!content?.trim() && !hasAttachments) {
@@ -175,7 +184,8 @@ exports.sendMessage = async (req, res) => {
             content:     (content || '').trim(),
             type,
             attachments: hasAttachments ? attachments : [],
-            replyTo:     replyTo || null,
+            replyTo:     isForwarded ? null : (replyTo || null),
+            isForwarded: !!isForwarded,
         });
 
         await Chat.updateOne({ _id: chatId }, { lastMessage: message._id, lastActivity: new Date() });
@@ -413,13 +423,19 @@ exports.editMessage = async (req, res) => {
             return res.status(400).json({ success: false, message: 'Cannot edit messages older than 24 hours' });
         }
 
+        const now = new Date();
         await Message.findByIdAndUpdate(msgId, {
-            content: content.trim(), isEdited: true, editedAt: new Date(),
+            content: content.trim(), isEdited: true, editedAt: now,
+            // Keep the version we're replacing for the admin audit trail
+            $push: { editHistory: { content: msg.content, editedAt: now } },
         });
 
         await broker.publishToRoom(msg.chat, 'chat:message_edited', {
             messageId: msgId, chatId: String(msg.chat),
-            content: content.trim(), editedAt: new Date(),
+            content: content.trim(), editedAt: now,
+            // Prev content only reaches admin clients (they already hold it) —
+            // non-admin clients ignore it. Kept out of persisted socket payload.
+            previousContent: msg.content,
         });
         res.json({ success: true });
     } catch (err) {

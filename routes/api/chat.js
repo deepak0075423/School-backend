@@ -2,7 +2,6 @@
 const express = require('express');
 const router  = express.Router();
 const { verifyToken, requirePasswordReset } = require('../../middleware/auth');
-const { uploadChat } = require('../../middleware/upload');
 const ctrl = require('../../controllers/chat.controller');
 
 const guard = [verifyToken, requirePasswordReset];
@@ -31,9 +30,6 @@ router.post('/messages/:msgId/react',   guard, ctrl.toggleReaction);
 router.patch('/group/:chatId/settings',          guard, ctrl.updateGroupSettings);
 router.post('/group/:chatId/member',             guard, ctrl.addMember);
 router.delete('/group/:chatId/member/:memberId', guard, ctrl.removeMember);
-
-// ── File upload ───────────────────────────────────────────────────────────────
-router.post('/upload', guard, uploadChat.single('file'), ctrl.uploadFile);
 
 // ── Admin oversight ───────────────────────────────────────────────────────────
 router.get('/admin/school-users', guard, ctrl.getSchoolUsers);
