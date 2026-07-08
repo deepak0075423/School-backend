@@ -16,6 +16,7 @@ router.get('/chats/:chatId/members',  guard, ctrl.getChatMembers);
 router.get('/contacts',     guard, ctrl.getContacts);
 router.get('/search',       guard, ctrl.searchMessages);
 router.get('/unread-count', guard, ctrl.getUnreadCount);
+router.post('/heartbeat',   guard, ctrl.heartbeat);
 
 // ── Create chats ──────────────────────────────────────────────────────────────
 router.post('/direct', guard, ctrl.createDirectChat);

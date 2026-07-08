@@ -45,15 +45,17 @@ async function _enrichChat(membership, userId, schoolId) {
     let displayName   = chat.name;
     let displayAvatar = chat.avatar;
     let otherUser     = null;
+    let otherReadAt   = null;   // recipient's last-read time — drives read ticks
 
     if (chat.type === 'direct') {
         const other = await ChatMember.findOne({
             chat: chat._id, user: { $ne: userId }, isActive: true,
-        }).populate('user', 'name role profileImage').lean();
+        }).populate('user', 'name role profileImage lastSeenAt').lean();
         if (other && other.user) {
             otherUser     = other.user;
             displayName   = other.user.name;
             displayAvatar = other.user.profileImage || '';
+            otherReadAt   = other.lastReadAt || null;
         }
     }
 
@@ -69,6 +71,7 @@ async function _enrichChat(membership, userId, schoolId) {
         displayName,
         displayAvatar,
         otherUser,
+        otherReadAt,
         unreadCount,
         isMuted:    membership.isMuted,
         isArchived: membership.isArchived,
@@ -608,7 +611,7 @@ exports.removeMember = async (req, res) => {
 exports.toggleMute = async (req, res) => {
     try {
         const { chatId }    = req.params;
-        const { muteUntil } = req.body;
+        const { muteUntil } = req.body || {};
 
         const member = await ChatMember.findOne({ chat: chatId, user: req.userId }).lean();
         if (!member) return res.status(403).json({ success: false, message: 'Not a member' });
@@ -692,6 +695,32 @@ exports.getUnreadCount = async (req, res) => {
         res.json({ success: true, data: { count: total } });
     } catch {
         res.json({ success: true, data: { count: 0 } });
+    }
+};
+
+// ─── Presence heartbeat + unread badge ────────────────────────────────────────
+
+/** POST /api/chat/heartbeat — refresh my presence, return total unread count */
+exports.heartbeat = async (req, res) => {
+    try {
+        await User.updateOne({ _id: req.userId }, { lastSeenAt: new Date() });
+
+        const memberships = await ChatMember.find({
+            user: req.userId, school: req.schoolId, isActive: true, isMuted: false,
+        }).select('chat lastReadAt').lean();
+
+        let unread = 0;
+        for (const m of memberships) {
+            unread += await Message.countDocuments({
+                chat:      m.chat,
+                sender:    { $ne: req.userId },
+                isDeleted: false,
+                createdAt: { $gt: m.lastReadAt || new Date(0) },
+            });
+        }
+        res.json({ success: true, data: { unread } });
+    } catch {
+        res.json({ success: true, data: { unread: 0 } });
     }
 };
 
