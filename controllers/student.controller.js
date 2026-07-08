@@ -58,9 +58,53 @@ exports.getDashboard = async (req, res) => {
 };
 exports.getMyClass = async (req, res) => {
     try {
-        const profile  = await StudentProfile.findOne({ user: req.userId }).lean();
-        const section  = await ClassSection.findById(profile?.currentSection)
-            .populate('class classTeacher').lean();
-        res.json({ success: true, data: { profile, section } });
+        const User                  = require('../models/User');
+        const SectionSubjectTeacher = require('../models/SectionSubjectTeacher');
+        const ClassMonitor          = require('../models/ClassMonitor');
+        const ClassAnnouncement     = require('../models/ClassAnnouncement');
+
+        const profile = await StudentProfile.findOne({ user: req.userId }).lean();
+        const section = await ClassSection.findById(profile?.currentSection)
+            .populate('class', 'className classNumber')
+            .populate('classTeacher',      'name email')
+            .populate('substituteTeacher', 'name email')
+            .populate('academicYear',      'yearName')
+            .lean();
+
+        if (!section) return res.json({ success: true, data: { profile, section: null } });
+
+        const [subjectTeachers, monitors, classmates, announcements] = await Promise.all([
+            SectionSubjectTeacher.find({ section: section._id })
+                .populate('subject', 'subjectName')
+                .populate('teacher', 'name')
+                .lean().catch(() => []),
+            ClassMonitor.find({ section: section._id }).populate('student', 'name').lean().catch(() => []),
+            User.find({ _id: { $in: section.enrolledStudents || [] } }).select('name').lean(),
+            ClassAnnouncement.find({ section: section._id, status: 'active' })
+                .sort({ createdAt: -1 }).limit(10).lean().catch(() => []),
+        ]);
+
+        const profiles = await StudentProfile.find({ user: { $in: (classmates || []).map(c => c._id) } })
+            .select('user rollNumber').lean();
+        const rollById = Object.fromEntries(profiles.map(p => [String(p.user), p.rollNumber]));
+        const roster = (classmates || [])
+            .map(c => ({ _id: c._id, name: c.name, rollNumber: rollById[String(c._id)] || '', isMe: String(c._id) === String(req.userId) }))
+            .sort((a, b) => (a.rollNumber || '').localeCompare(b.rollNumber || '', undefined, { numeric: true }) || a.name.localeCompare(b.name));
+
+        const seen = new Set();
+        const subjects = [];
+        (subjectTeachers || []).forEach(st => {
+            const key = String(st.subject?._id) + String(st.teacher?._id);
+            if (st.subject && !seen.has(key)) { seen.add(key); subjects.push({ subject: st.subject?.subjectName, teacher: st.teacher?.name }); }
+        });
+
+        res.json({ success: true, data: {
+            profile,
+            section,
+            subjectTeachers: subjects,
+            monitors: (monitors || []).map(m => ({ name: m.student?.name })).filter(m => m.name),
+            classmates: roster,
+            announcements,
+        }});
     } catch (err) { res.status(500).json({ success: false, message: err.message }); }
 };

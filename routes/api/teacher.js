@@ -76,6 +76,7 @@ router.post('/attendance/mark',        attendanceGuard, sectionCtrl.markAttendan
 
 // ── Teacher Self Attendance ───────────────────────────────────────────────────
 router.get('/my-attendance',           attendanceGuard, attendanceCtrl.getTeacherSelfAttendance);
+router.get('/attendance-ranking',      attendanceGuard, attendanceCtrl.getSectionRanking);
 router.post('/my-attendance/clock-in',  attendanceGuard, attendanceCtrl.clockIn);
 router.post('/my-attendance/clock-out', attendanceGuard, attendanceCtrl.clockOut);
 

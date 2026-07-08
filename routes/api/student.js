@@ -59,6 +59,7 @@ router.get('/timetable/download', timetableGuard, timetableCtrl.studentDownloadT
 
 // Attendance
 router.get('/my-attendance',       attendanceGuard, attendanceCtrl.getStudentAttendanceCalendar);
+router.get('/attendance-ranking',  attendanceGuard, attendanceCtrl.getMyClassRanking);
 router.get('/correction',          attendanceGuard, attendanceCtrl.getStudentCorrectionForm);
 router.post('/correction/submit',  attendanceGuard, attendanceCtrl.submitStudentCorrection);
 

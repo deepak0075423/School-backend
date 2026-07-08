@@ -367,6 +367,84 @@ exports.submitRegularization = async (req, res) => {
     } catch (e) { err(res, e); }
 };
 
+// ── Attendance ranking (students ranked by attendance % within a section) ─────
+
+async function computeSectionRanking(sectionId, schoolId) {
+    const User         = require('../models/User');
+    const AcademicYear = require('../models/AcademicYear');
+    const section = await ClassSection.findOne({ _id: sectionId, school: schoolId }).lean();
+    if (!section) return [];
+
+    // Restrict to the active academic year's date window
+    const ay = await AcademicYear.findOne({ school: schoolId, status: 'active' }).lean();
+    const sessionFilter = { section: sectionId };
+    if (ay?.startDate && ay?.endDate) {
+        sessionFilter.date = { $gte: new Date(ay.startDate), $lte: new Date(ay.endDate) };
+    }
+
+    const sessions   = await Attendance.find(sessionFilter).select('_id').lean();
+    const sessionIds = sessions.map(s => s._id);
+    const total      = sessionIds.length;
+
+    const records = sessionIds.length
+        ? await AttendanceRecord.find({ attendance: { $in: sessionIds } }).lean()
+        : [];
+
+    const byStudent = {};
+    for (const r of records) {
+        const k = String(r.student);
+        byStudent[k] = byStudent[k] || { present: 0 };
+        if (['Present', 'Late'].includes(r.status)) byStudent[k].present += 1;
+    }
+
+    const ids = section.enrolledStudents || [];
+    const [students, profiles] = await Promise.all([
+        User.find({ _id: { $in: ids } }).select('name').lean(),
+        StudentProfile.find({ user: { $in: ids } }).select('user rollNumber').lean(),
+    ]);
+    const rollById = Object.fromEntries(profiles.map(p => [String(p.user), p.rollNumber]));
+
+    const list = students.map(s => {
+        const st  = byStudent[String(s._id)] || { present: 0 };
+        const pct = total ? Math.round((st.present / total) * 100) : 0;
+        return {
+            student: { _id: s._id, name: s.name, rollNumber: rollById[String(s._id)] || '' },
+            present: st.present, total, percentage: pct,
+        };
+    });
+
+    list.sort((a, b) => b.percentage - a.percentage || (a.student.name || '').localeCompare(b.student.name || ''));
+
+    // Standard competition ranking (ties share a rank)
+    let rank = 0, prevPct = null;
+    list.forEach((it, i) => {
+        if (it.percentage !== prevPct) { rank = i + 1; prevPct = it.percentage; }
+        it.rank = rank;
+    });
+    return list;
+}
+
+// Student: ranking within own section, with own rank highlighted
+exports.getMyClassRanking = async (req, res) => {
+    try {
+        const profile = await StudentProfile.findOne({ user: req.userId, school: req.schoolId }).lean();
+        if (!profile?.currentSection) return ok(res, { ranking: [], myRank: null, total: 0 });
+        const ranking = await computeSectionRanking(profile.currentSection, req.schoolId);
+        const me = ranking.find(r => String(r.student._id) === String(req.userId));
+        ok(res, { ranking, myRank: me?.rank || null, total: ranking.length, myPercentage: me?.percentage ?? null });
+    } catch (e) { err(res, e); }
+};
+
+// Teacher (class/vice teacher): ranking for their section
+exports.getSectionRanking = async (req, res) => {
+    try {
+        const mySection = await teacherSection(req);
+        if (!mySection) return ok(res, { ranking: [], section: null });
+        const ranking = await computeSectionRanking(mySection._id, req.schoolId);
+        ok(res, { ranking, section: { _id: mySection._id, sectionName: mySection.sectionName } });
+    } catch (e) { err(res, e); }
+};
+
 // ── Teacher: section dashboard & student profile ──────────────────────────────
 
 exports.getAttendanceDashboard = async (req, res) => {
