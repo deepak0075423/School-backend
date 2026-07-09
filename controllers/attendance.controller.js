@@ -136,6 +136,113 @@ exports.adminReviewRegularization = async (req, res) => {
     } catch (e) { err(res, e); }
 };
 
+// Admin: directly regularise any staff member's attendance for a day (no request/approval)
+exports.adminRegularizeAttendance = async (req, res) => {
+    try {
+        const { teacherId, date, checkIn, checkOut, status, remarks } = req.body;
+        if (!teacherId || !date) return err(res, 'teacherId and date are required', 400);
+        if (!checkIn && !checkOut && !status)
+            return err(res, 'Provide clock-in/out times or a status', 400);
+
+        const User = require('../models/User');
+        const staff = await User.findOne({ _id: teacherId, school: req.schoolId }).select('_id role').lean();
+        if (!staff || !['teacher', 'school_admin'].includes(staff.role))
+            return err(res, 'Staff member not found', 404);
+
+        const dateStr = new Date(date).toISOString().split('T')[0];
+        if (dateStr > todayStr()) return err(res, 'Cannot regularise a future date', 400);
+        const { start, end } = dayRange(dateStr);
+
+        const set = { markedBy: req.userId, remarks: `Regularized by admin. ${remarks || ''}`.trim() };
+        if (checkIn || checkOut) {
+            set.status = 'Present';
+            if (checkIn)  set.checkIn  = checkIn;
+            if (checkOut) set.checkOut = checkOut;
+        } else {
+            set.status = capTeacher(status);
+        }
+
+        const rec = await TeacherAttendance.findOneAndUpdate(
+            { teacher: teacherId, school: req.schoolId, date: { $gte: start, $lte: end } },
+            { $set: set, $setOnInsert: { teacher: teacherId, school: req.schoolId, date: new Date(dateStr + 'T00:00:00.000Z') } },
+            { upsert: true, new: true }
+        );
+        ok(res, { ...rec.toObject(), status: low(rec.status) });
+    } catch (e) { err(res, e); }
+};
+
+// Admin: search people (staff + students) to regularise, with clear role labels
+exports.adminSearchPeople = async (req, res) => {
+    try {
+        const User = require('../models/User');
+        const { search = '' } = req.query;
+        const filter = {
+            school: req.schoolId,
+            role: { $in: ['teacher', 'school_admin', 'student'] },
+        };
+        if (search) filter.$or = [{ name: new RegExp(search, 'i') }, { email: new RegExp(search, 'i') }];
+
+        const users = await User.find(filter).select('_id name email role').sort({ name: 1 }).limit(20).lean();
+
+        // Enrich students with their class/section for disambiguation
+        const studentIds = users.filter(u => u.role === 'student').map(u => u._id);
+        let sectionByStudent = {};
+        if (studentIds.length) {
+            const profiles = await StudentProfile.find({ user: { $in: studentIds }, school: req.schoolId })
+                .select('user currentSection rollNumber')
+                .populate({ path: 'currentSection', select: 'sectionName class', populate: { path: 'class', select: 'className' } })
+                .lean();
+            sectionByStudent = profiles.reduce((m, p) => {
+                m[String(p.user)] = {
+                    className:   p.currentSection?.class?.className || '',
+                    sectionName: p.currentSection?.sectionName || '',
+                    rollNumber:  p.rollNumber || '',
+                };
+                return m;
+            }, {});
+        }
+
+        ok(res, users.map(u => ({
+            _id: u._id, name: u.name, email: u.email, role: u.role,
+            ...(u.role === 'student' ? sectionByStudent[String(u._id)] || {} : {}),
+        })));
+    } catch (e) { err(res, e); }
+};
+
+// Admin: directly set a student's attendance status for a given day (no request)
+exports.adminRegularizeStudent = async (req, res) => {
+    try {
+        const { studentId, date, status, remarks } = req.body;
+        if (!studentId || !date || !status)
+            return err(res, 'studentId, date and status are required', 400);
+        const requested = capRecord(status);
+        if (!requested) return err(res, 'status must be present, absent or late', 400);
+
+        const dateStr = new Date(date).toISOString().split('T')[0];
+        if (dateStr > todayStr()) return err(res, 'Cannot regularise a future date', 400);
+
+        const profile = await StudentProfile.findOne({ user: studentId, school: req.schoolId })
+            .select('currentSection').lean();
+        if (!profile?.currentSection) return err(res, 'Student is not enrolled in a section', 404);
+
+        const { start, end } = dayRange(dateStr);
+        // Reuse the day's attendance session, or create one so the record has a parent
+        const session = await Attendance.findOneAndUpdate(
+            { section: profile.currentSection, date: { $gte: start, $lte: end } },
+            { $setOnInsert: { section: profile.currentSection, date: new Date(dateStr + 'T00:00:00.000Z'), createdBy: req.userId } },
+            { upsert: true, new: true }
+        );
+
+        const rec = await AttendanceRecord.findOneAndUpdate(
+            { attendance: session._id, student: studentId },
+            { $set: { status: requested, remarks: `Regularized by admin. ${remarks || ''}`.trim() },
+              $setOnInsert: { attendance: session._id, student: studentId } },
+            { upsert: true, new: true }
+        );
+        ok(res, { ...rec.toObject(), status: low(rec.status) });
+    } catch (e) { err(res, e); }
+};
+
 // ── Teacher: self attendance ──────────────────────────────────────────────────
 
 // ── Self attendance: clock in/out with derived statuses ───────────────────────
@@ -577,10 +684,16 @@ exports.submitStudentCorrection = async (req, res) => {
         const requested = capRecord(requestedStatus);
         if (!requested) return err(res, 'requestedStatus must be present, absent or late', 400);
 
+        // Students may only regularize within the last one month
+        const dateStr = new Date(date).toISOString().split('T')[0];
+        if (dateStr > todayStr()) return err(res, 'Cannot request a correction for a future date', 400);
+        const oneMonthAgo = new Date(); oneMonthAgo.setMonth(oneMonthAgo.getMonth() - 1);
+        if (new Date(dateStr + 'T00:00:00.000Z') < new Date(oneMonthAgo.toISOString().split('T')[0] + 'T00:00:00.000Z'))
+            return err(res, 'Correction requests are only allowed for the last one month', 400);
+
         const profile = await StudentProfile.findOne({ user: req.userId, school: req.schoolId }).lean();
         if (!profile?.currentSection) return err(res, 'You are not enrolled in a section', 400);
 
-        const dateStr = new Date(date).toISOString().split('T')[0];
         const { start, end } = dayRange(dateStr);
 
         const session = await Attendance.findOne({

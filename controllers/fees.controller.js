@@ -183,8 +183,9 @@ exports.getFeeStructures = async (req, res) => {
             : await getActiveYear(req.schoolId);
 
         const structures = await FeeStructure.find({ school: req.schoolId, academicYear: ay?._id })
-            .populate('class',   'className classNumber')
-            .populate('section', 'sectionName')
+            .populate('class',        'className classNumber')
+            .populate('section',      'sectionName')
+            .populate('academicYear', 'yearName')
             .sort({ name: 1 })
             .lean();
         res.json({ success: true, data: structures });
@@ -416,34 +417,60 @@ exports.toggleConcession = async (req, res) => {
 
 exports.getStudentFees = async (req, res) => {
     try {
-        const { q, page = 1, limit = 20 } = req.query;
+        const { q, search, page = 1, limit = 20 } = req.query;
+        const term = q || search;
         const ay = await getActiveYear(req.schoolId);
 
         const userFilter = { school: req.schoolId, role: 'student', isActive: true };
-        if (q) userFilter.$or = [{ name: { $regex: q, $options: 'i' } }, { email: { $regex: q, $options: 'i' } }];
+        if (term) userFilter.$or = [{ name: { $regex: term, $options: 'i' } }, { email: { $regex: term, $options: 'i' } }];
 
         const [students, total] = await Promise.all([
-            User.find(userFilter).select('name email rollNumber').skip((+page - 1) * +limit).limit(+limit).lean(),
+            User.find(userFilter).select('name email rollNumber').sort({ name: 1 }).skip((+page - 1) * +limit).limit(+limit).lean(),
             User.countDocuments(userFilter),
         ]);
 
         const studentIds = students.map(s => s._id);
-        const [assignments, payments] = await Promise.all([
+        const [assignments, payments, profiles] = await Promise.all([
             StudentFeeAssignment.find({ school: req.schoolId, student: { $in: studentIds }, academicYear: ay?._id }).lean(),
             FeePayment.aggregate([
                 { $match: { school: req.schoolId, student: { $in: studentIds }, paymentStatus: 'completed', academicYear: ay?._id } },
                 { $group: { _id: '$student', paid: { $sum: '$amount' } } },
             ]),
+            StudentProfile.find({ user: { $in: studentIds }, school: req.schoolId })
+                .select('user currentSection rollNumber')
+                .populate({ path: 'currentSection', select: 'sectionName class', populate: { path: 'class', select: 'className' } })
+                .lean(),
         ]);
 
         const assignMap = Object.fromEntries(assignments.map(a => [a.student.toString(), a]));
         const paidMap   = Object.fromEntries(payments.map(p => [p._id.toString(), p.paid]));
+        const profMap   = Object.fromEntries(profiles.map(p => [p.user.toString(), p]));
 
         const data = students.map(s => {
-            const asgn = assignMap[s._id.toString()];
-            const paid = paidMap[s._id.toString()] || 0;
-            const due  = (asgn?.totalAmount || 0) - paid;
-            return { ...s, totalDue: asgn?.totalAmount || 0, paid, balance: due };
+            const asgn  = assignMap[s._id.toString()];
+            const prof  = profMap[s._id.toString()];
+            const total = asgn?.totalAmount || 0;
+            const paid  = paidMap[s._id.toString()] || 0;
+            const due   = total - paid;
+            const status = total === 0 ? 'unpaid'
+                : due <= 0 ? 'paid'
+                : paid > 0 ? 'partial'
+                : 'unpaid';
+            return {
+                _id: s._id,
+                student: {
+                    _id: s._id,
+                    name: s.name,
+                    email: s.email,
+                    rollNumber: prof?.rollNumber || s.rollNumber || '',
+                    class:   prof?.currentSection?.class ? { name: prof.currentSection.class.className } : null,
+                    section: prof?.currentSection ? { name: prof.currentSection.sectionName } : null,
+                },
+                totalAmount: total,
+                paidAmount:  paid,
+                dueAmount:   due,
+                status,
+            };
         });
         res.json({ success: true, data, total, page: +page, pages: Math.ceil(total / +limit) });
     } catch (e) { res.status(500).json({ success: false, message: e.message }); }

@@ -205,6 +205,12 @@ exports.updateUser = async (req, res) => {
 
 exports.deleteUser = async (req, res) => {
     try {
+        const target = await User.findById(req.params.id).select('_id role').lean();
+        if (!target) return res.status(404).json({ success: false, message: 'User not found' });
+        if (String(target._id) === String(req.userId))
+            return res.status(403).json({ success: false, message: 'You cannot delete your own account' });
+        if (target.role === 'super_admin')
+            return res.status(403).json({ success: false, message: 'Super admin accounts cannot be deleted' });
         await User.findByIdAndDelete(req.params.id);
         res.json({ success: true, message: 'User deleted' });
     } catch (err) { res.status(500).json({ success: false, message: err.message }); }
@@ -222,9 +228,24 @@ exports.toggleUserStatus = async (req, res) => {
 
 exports.bulkDeleteUsers = async (req, res) => {
     try {
-        const { ids } = req.body;
-        await User.deleteMany({ _id: { $in: ids } });
-        res.json({ success: true, message: `${ids.length} users deleted` });
+        const ids = req.body.ids || [];
+        // Never delete super admins or the requester themselves
+        const result = await User.deleteMany({
+            _id: { $in: ids, $ne: req.userId },
+            role: { $ne: 'super_admin' },
+        });
+        const deleted = result.deletedCount;
+        const skipped = ids.length - deleted;
+        res.json({
+            success: true,
+            deleted,
+            skipped,
+            message: deleted === 0
+                ? 'Super admin accounts cannot be deleted'
+                : skipped > 0
+                    ? `${deleted} user(s) deleted · ${skipped} protected account(s) skipped (super admins cannot be deleted)`
+                    : `${deleted} user(s) deleted`,
+        });
     } catch (err) { res.status(500).json({ success: false, message: err.message }); }
 };
 

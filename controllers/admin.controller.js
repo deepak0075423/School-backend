@@ -337,6 +337,14 @@ exports.createAdmin = async (req, res) => {
 exports.deleteUser = async (req, res) => {
     try {
         const userId = req.params.id;
+        // Only allow deleting non-super-admin users belonging to this school
+        const target = await User.findById(userId).select('_id role school').lean();
+        if (!target || String(target.school) !== String(req.schoolId))
+            return res.status(404).json({ success: false, message: 'User not found' });
+        if (target.role === 'super_admin')
+            return res.status(403).json({ success: false, message: 'Super admin accounts cannot be deleted' });
+        if (String(target._id) === String(req.userId))
+            return res.status(403).json({ success: false, message: 'You cannot delete your own account' });
         // Remove from all section enrollments
         const affectedSections = await ClassSection.find({ enrolledStudents: userId }, '_id').lean();
         if (affectedSections.length) {
@@ -359,7 +367,19 @@ exports.deleteUser = async (req, res) => {
 
 exports.bulkDeleteUsers = async (req, res) => {
     try {
-        const { ids } = req.body;
+        const reqIds = req.body.ids || [];
+        // Restrict to this school's non-super-admin users, excluding the requester
+        const deletable = await User.find({
+            _id: { $in: reqIds, $ne: req.userId },
+            school: req.schoolId,
+            role: { $ne: 'super_admin' },
+        }).select('_id').lean();
+        const ids = deletable.map(u => String(u._id));
+        const skipped = reqIds.length - ids.length;
+        if (!ids.length) return res.json({
+            success: true, deleted: 0, skipped,
+            message: 'Selected accounts cannot be deleted',
+        });
         // Remove all ids from section enrollments
         const affectedSections = await ClassSection.find({ enrolledStudents: { $in: ids } }, '_id').lean();
         if (affectedSections.length) {
@@ -375,7 +395,14 @@ exports.bulkDeleteUsers = async (req, res) => {
         }
         await StudentProfile.deleteMany({ user: { $in: ids } });
         await User.deleteMany({ _id: { $in: ids }, school: req.schoolId });
-        res.json({ success: true, message: `${ids.length} users deleted` });
+        res.json({
+            success: true,
+            deleted: ids.length,
+            skipped,
+            message: skipped > 0
+                ? `${ids.length} user(s) deleted · ${skipped} protected account(s) skipped`
+                : `${ids.length} user(s) deleted`,
+        });
     } catch (err) { jsonErr(res, err); }
 };
 

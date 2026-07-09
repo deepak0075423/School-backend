@@ -179,6 +179,9 @@ router.post('/my-attendance/clock-in',  attendanceGuard, attendanceCtrl.clockIn)
 router.post('/my-attendance/clock-out', attendanceGuard, attendanceCtrl.clockOut);
 router.get('/regularization',           attendanceGuard, attendanceCtrl.getRegularizationForm);
 router.post('/regularization',          attendanceGuard, attendanceCtrl.submitRegularization);
+router.post('/regularization/apply',    attendanceGuard, attendanceCtrl.adminRegularizeAttendance);
+router.get('/regularization/people',    attendanceGuard, attendanceCtrl.adminSearchPeople);
+router.post('/regularization/student',  attendanceGuard, attendanceCtrl.adminRegularizeStudent);
 
 // ── Notifications ─────────────────────────────────────────────────────────────
 router.get('/notifications',        notifGuard, notifCtrl.getList);
