@@ -7,6 +7,9 @@ const LibraryFine        = require('../models/LibraryFine');
 const LibraryPolicy      = require('../models/LibraryPolicy');
 const LibraryAuditLog    = require('../models/LibraryAuditLog');
 const XLSX               = require('xlsx');
+const { notify }         = require('../services/notifyService');
+
+const fmtLibDate = d => new Date(d).toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' });
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -298,6 +301,12 @@ exports.issueBook = async (req, res) => {
         await LibraryBook.updateOne({ _id: bookId }, { $inc: { availableCopies: -1 } });
 
         audit(req.schoolId, req.userId, req.userRole, 'BOOK_ISSUED', 'Issuance', issuance._id, null, { book: bookId, user: userId });
+        LibraryBook.findById(bookId).select('title').lean().then(book => notify({
+            school: req.schoolId, sender: req.userId, senderRole: req.userRole,
+            title: '📚 Book issued to you',
+            body: `"${book?.title || 'A book'}" has been issued to you. Due date: ${fmtLibDate(computedDue)}.`,
+            recipients: [userId],
+        })).catch(() => {});
         res.status(201).json({ success: true, data: issuance });
     } catch (e) { res.status(500).json({ success: false, message: e.message }); }
 };
@@ -368,6 +377,22 @@ exports.returnBook = async (req, res) => {
             nextReservation.readyAt = new Date();
             nextReservation.expiresAt = new Date(Date.now() + (policy.reservationExpiryDays || 2) * 86400000);
             await nextReservation.save();
+        }
+
+        const bookDoc = await LibraryBook.findById(issuance.book).select('title').lean().catch(() => null);
+        notify({
+            school: req.schoolId, sender: req.userId, senderRole: req.userRole,
+            title: '📚 Book return recorded',
+            body: `Return of "${bookDoc?.title || 'a book'}" has been recorded.${fine ? ` A late fine of ₹${fine.amount} (${fine.daysOverdue} day${fine.daysOverdue === 1 ? '' : 's'} overdue) was applied.` : ''}`,
+            recipients: [issuance.issuedTo],
+        });
+        if (nextReservation) {
+            notify({
+                school: req.schoolId, sender: req.userId, senderRole: req.userRole,
+                title: '🔖 Reserved book available',
+                body: `"${bookDoc?.title || 'A book'}" you reserved is now available. Collect it before ${fmtLibDate(nextReservation.expiresAt)}.`,
+                recipients: [nextReservation.reservedBy],
+            });
         }
 
         res.json({ success: true, data: { issuance, fine } });
@@ -454,6 +479,12 @@ exports.markReservationReady = async (req, res) => {
         ).lean();
         if (!res_) return res.status(404).json({ success: false, message: 'Pending reservation not found' });
         audit(req.schoolId, req.userId, req.userRole, 'RESERVATION_READY', 'Reservation', res_._id, null, null);
+        LibraryBook.findById(res_.book).select('title').lean().then(book => notify({
+            school: req.schoolId, sender: req.userId, senderRole: req.userRole,
+            title: '🔖 Reserved book available',
+            body: `"${book?.title || 'A book'}" you reserved is ready for pickup. Collect it before ${fmtLibDate(res_.expiresAt)}.`,
+            recipients: [res_.reservedBy],
+        })).catch(() => {});
         res.json({ success: true, data: res_ });
     } catch (e) { res.status(500).json({ success: false, message: e.message }); }
 };
@@ -506,6 +537,12 @@ exports.collectFine = async (req, res) => {
         fine.collectedBy = req.userId;
         await fine.save();
         audit(req.schoolId, req.userId, req.userRole, 'FINE_PAID', 'Fine', fine._id, null, { status: 'paid' });
+        notify({
+            school: req.schoolId, sender: req.userId, senderRole: req.userRole,
+            title: '💳 Library fine paid',
+            body: `Your library fine of ₹${fine.amount} has been recorded as paid.`,
+            recipients: [fine.user],
+        });
         res.json({ success: true, data: fine });
     } catch (e) { res.status(500).json({ success: false, message: e.message }); }
 };
@@ -521,6 +558,12 @@ exports.waiveFine = async (req, res) => {
         fine.waiverReason = reason || '';
         await fine.save();
         audit(req.schoolId, req.userId, req.userRole, 'FINE_WAIVED', 'Fine', fine._id, null, { status: 'waived', reason });
+        notify({
+            school: req.schoolId, sender: req.userId, senderRole: req.userRole,
+            title: '💳 Library fine waived',
+            body: `Your library fine of ₹${fine.amount} has been waived.${reason ? `\nReason: ${reason}` : ''}`,
+            recipients: [fine.user],
+        });
         res.json({ success: true, data: fine });
     } catch (e) { res.status(500).json({ success: false, message: e.message }); }
 };

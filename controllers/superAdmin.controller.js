@@ -12,19 +12,19 @@ const ClassSection    = require('../models/ClassSection');
 const Class           = require('../models/Class');
 const AcademicYear    = require('../models/AcademicYear');
 const mailer  = require('../config/mailer');
+const { sendSchoolMail, emailHeaderHtml, getMailContext } = require('../utils/schoolMailer');
 
 const generateOTP = () => {
     const chars = 'ABCDEFGHJKMNPQRSTUVWXYZabcdefghjkmnpqrstuvwxyz23456789';
     return Array.from({ length: 10 }, () => chars[Math.floor(Math.random() * chars.length)]).join('');
 };
 
-const sendWelcomeEmail = (to, name, email, otp, schoolName = 'School Management') => {
+const sendWelcomeEmail = (to, name, email, otp, schoolName = 'Aksharum', schoolId = null) => {
     const loginUrl = `${process.env.FRONTEND_URL || 'http://localhost:3000'}/login`;
+    getMailContext(schoolId).then(({ school }) => {
     const html = `
     <div style="font-family:Arial,sans-serif;max-width:600px;margin:0 auto;color:#333">
-      <div style="background:#4f46e5;padding:24px 32px;border-radius:8px 8px 0 0">
-        <h1 style="color:#fff;margin:0;font-size:1.4rem">Welcome to ${schoolName}!</h1>
-      </div>
+      ${emailHeaderHtml(school, `Welcome to ${school?.name || schoolName}!`)}
       <div style="background:#f9fafb;padding:28px 32px;border-radius:0 0 8px 8px;border:1px solid #e5e7eb;border-top:none">
         <p style="margin-top:0">Hi <strong>${name}</strong>,</p>
         <p>Your account has been created. Use the one-time credentials below to log in for the first time:</p>
@@ -51,13 +51,13 @@ const sendWelcomeEmail = (to, name, email, otp, schoolName = 'School Management'
         </p>
       </div>
     </div>`;
-    mailer.sendMail({
-        from: `"${schoolName}" <${process.env.SMTP_USER}>`,
+    sendSchoolMail(schoolId, {
         to,
         subject: `Your account is ready — action required`,
         html,
-    }).then(info => console.log(`[email] welcome sent to ${to} — ${info.messageId}`))
-      .catch(err => console.error(`[email] failed to send to ${to}:`, err.message));
+        fromName: school?.name || schoolName,
+    });
+    }).catch(err => console.error(`[email] welcome failed for ${to}:`, err.message));
 };
 
 exports.getDashboard = async (req, res) => {
@@ -186,7 +186,7 @@ exports.createUser = async (req, res) => {
             isFirstLogin: true,
             school: (role !== 'super_admin') ? school : null,
         });
-        sendWelcomeEmail(email, name, email, otp);
+        sendWelcomeEmail(email, name, email, otp, undefined, school);
         res.status(201).json({ success: true, data: user });
     } catch (err) { res.status(400).json({ success: false, message: err.message }); }
 };
@@ -267,7 +267,7 @@ const _bulkImport = async (req, res, role) => {
                 const otp  = generateOTP();
                 const user = await User.create({ name, email, role, school: schoolId, password: await bcrypt.hash(otp, 12), isFirstLogin: true });
                 created.push(user._id);
-                sendWelcomeEmail(email, name, email, otp);
+                sendWelcomeEmail(email, name, email, otp, undefined, schoolId);
             } catch (e) { errors.push({ email, reason: e.message }); }
         }
         res.json({ success: true, created: created.length, errors });
@@ -410,14 +410,14 @@ exports.bulkStudents = async (req, res) => {
                 const parentUser = await User.create({ name: parentName, email: parentEmail, phone: parentPhone, role: 'parent', school: schoolId, password: await bcrypt.hash(parentOtp, 12), isFirstLogin: true });
                 await ParentProfile.create({ user: parentUser._id, school: schoolId });
                 parentUserId = parentUser._id;
-                sendWelcomeEmail(parentEmail, parentName, parentEmail, parentOtp, schoolName);
+                sendWelcomeEmail(parentEmail, parentName, parentEmail, parentOtp, schoolName, schoolId);
             }
 
             const otp = generateOTP();
             const studentUser = await User.create({ name, email, phone, role: 'student', school: schoolId, password: await bcrypt.hash(otp, 12), isFirstLogin: true });
             await StudentProfile.create({ user: studentUser._id, school: schoolId, admissionNumber: admNo, dob, gender, bloodGroup, category, address, currentSection: section._id, parent: parentUserId });
             await ParentProfile.findOneAndUpdate({ user: parentUserId }, { $addToSet: { children: studentUser._id } });
-            sendWelcomeEmail(email, name, email, otp, schoolName);
+            sendWelcomeEmail(email, name, email, otp, schoolName, schoolId);
 
             created++;
             push({ type: 'row_done', row: rowNum, name, success: true });

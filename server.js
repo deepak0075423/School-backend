@@ -73,6 +73,8 @@ app.use('/api/parent',        require('./routes/api/parent'));
 app.use('/api/fees',          require('./routes/api/fees'));
 app.use('/api/payroll',       require('./routes/api/payroll'));
 app.use('/api/library',       require('./routes/api/library'));
+app.use('/api/inventory',     require('./routes/api/inventory'));
+app.use('/api/transport',     require('./routes/api/transport'));
 app.use('/api/chat',          require('./routes/api/chat'));
 app.use('/api/notifications', require('./routes/api/notifications'));
 app.use('/api/profile',       require('./routes/api/profile'));

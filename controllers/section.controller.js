@@ -65,11 +65,15 @@ exports.getAttendance = async (req, res) => {
     try {
         const { date } = req.query;
         const mySection = await teacherSection(req);
-        const students = await StudentProfile.find({ currentSection: mySection?._id })
+        // No section → no students. Guard against find({ currentSection: undefined })
+        // which Mongoose would treat as "match all" and leak the whole school.
+        if (!mySection) return ok(res, { students: [], records: [] });
+
+        const students = await StudentProfile.find({ currentSection: mySection._id })
             .populate('user','name').lean();
 
         let records = [];
-        if (date && mySection) {
+        if (date) {
             const attendanceDate = new Date(date + 'T00:00:00.000Z');
             const session = await Attendance.findOne({ section: mySection._id, date: attendanceDate }).lean();
             if (session) {
@@ -105,15 +109,31 @@ exports.markAttendance = async (req, res) => {
             )
         ));
 
-        // Notify parents by email (non-blocking)
+        // Notify parents by email + in-app (non-blocking)
         setImmediate(async () => {
             try {
                 const User = require('../models/User');
                 const School = require('../models/School');
                 const { sendAttendanceNotification } = require('../utils/sendEmail');
+                const { notify } = require('../services/notifyService');
                 const school = await School.findById(req.schoolId).select('name').lean();
+                const dateLabel = new Date(date).toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' });
                 for (const r of records) {
+                    const status = capStatus(r.status);
                     const sp = await StudentProfile.findOne({ user: r.studentId }).populate('user', 'name').lean();
+                    // In-app: tell absent/late students (and their parents) right away
+                    if (status !== 'Present') {
+                        const targets = [r.studentId];
+                        if (sp?.parent) targets.push(sp.parent);
+                        notify({
+                            school:     req.schoolId,
+                            sender:     req.userId,
+                            senderRole: req.userRole || 'teacher',
+                            title:      `Attendance: ${sp?.user?.name || 'Student'} marked ${status}`,
+                            body:       `${sp?.user?.name || 'The student'} was marked ${status.toLowerCase()} on ${dateLabel}.`,
+                            recipients: targets,
+                        });
+                    }
                     if (!sp?.parent) continue;
                     const parentUser = await User.findById(sp.parent).select('name email').lean();
                     if (!parentUser?.email) continue;
@@ -122,13 +142,105 @@ exports.markAttendance = async (req, res) => {
                         parentName: parentUser.name,
                         studentName: sp.user?.name || '',
                         date: new Date(date),
-                        status: capStatus(r.status),
+                        status,
                         schoolName: school?.name || '',
+                        schoolId: req.schoolId,
                     });
                 }
             } catch (e) { console.error('Attendance notification error:', e.message); }
         });
 
         ok(res, saved);
+    } catch (e) { err(res, e); }
+};
+
+// ── Teacher: all sections I'm attached to (class teacher / substitute / subject) ──
+exports.getMySections = async (req, res) => {
+    try {
+        const SectionSubjectTeacher = require('../models/SectionSubjectTeacher');
+        const [ownSections, subjectLinks] = await Promise.all([
+            ClassSection.find({
+                school: req.schoolId,
+                $or: [{ classTeacher: req.userId }, { substituteTeacher: req.userId }],
+            }).populate('class', 'className').lean(),
+            SectionSubjectTeacher.find({ teacher: req.userId })
+                .populate({ path: 'section', populate: { path: 'class', select: 'className' } })
+                .populate('subject', 'subjectName')
+                .lean(),
+        ]);
+
+        const map = {};
+        ownSections.forEach(sec => {
+            map[sec._id.toString()] = {
+                _id: sec._id,
+                sectionName: sec.sectionName,
+                className: sec.class?.className || '',
+                studentCount: (sec.enrolledStudents || []).length,
+                roles: [String(sec.classTeacher) === String(req.userId) ? 'Class Teacher' : 'Substitute Teacher'],
+                subjects: [],
+            };
+        });
+        subjectLinks.forEach(link => {
+            const sec = link.section;
+            if (!sec?._id) return;
+            const id = sec._id.toString();
+            if (!map[id]) {
+                map[id] = {
+                    _id: sec._id,
+                    sectionName: sec.sectionName,
+                    className: sec.class?.className || '',
+                    studentCount: (sec.enrolledStudents || []).length,
+                    roles: [],
+                    subjects: [],
+                };
+            }
+            if (link.subject?.subjectName && !map[id].subjects.includes(link.subject.subjectName)) {
+                map[id].subjects.push(link.subject.subjectName);
+            }
+            if (!map[id].roles.includes('Subject Teacher')) map[id].roles.push('Subject Teacher');
+        });
+
+        ok(res, Object.values(map));
+    } catch (e) { err(res, e); }
+};
+
+// ── Teacher: detail of one of my sections (with access check) ────────────────
+exports.getTeacherSectionDetail = async (req, res) => {
+    try {
+        const SectionSubjectTeacher = require('../models/SectionSubjectTeacher');
+        const section = await ClassSection.findOne({ _id: req.params.sectionId, school: req.schoolId })
+            .populate('class', 'className')
+            .populate('classTeacher', 'name email')
+            .populate('substituteTeacher', 'name email')
+            .populate('enrolledStudents', 'name email')
+            .lean();
+        if (!section) return err(res, 'Section not found', 404);
+
+        const isOwn = [section.classTeacher?._id, section.substituteTeacher?._id]
+            .some(id => String(id) === String(req.userId));
+        const subjectLink = await SectionSubjectTeacher.findOne({ section: section._id, teacher: req.userId }).lean();
+        if (!isOwn && !subjectLink) return err(res, 'You are not assigned to this section', 403);
+
+        // Roll numbers for the roster
+        const enrolled = section.enrolledStudents || [];
+        if (enrolled.length) {
+            const profiles = await StudentProfile.find(
+                { user: { $in: enrolled.map(s => s._id) } }, 'user rollNumber gender'
+            ).lean();
+            const pMap = {};
+            profiles.forEach(p => { pMap[p.user.toString()] = p; });
+            section.enrolledStudents = enrolled.map(s => ({
+                ...s,
+                rollNumber: pMap[s._id.toString()]?.rollNumber || '',
+                gender:     pMap[s._id.toString()]?.gender || '',
+            }));
+        }
+
+        const subjectTeachers = await SectionSubjectTeacher.find({ section: section._id })
+            .populate('subject', 'subjectName').populate('teacher', 'name').lean();
+        const announcements = await ClassAnnouncement.find({ section: section._id })
+            .sort({ createdAt: -1 }).limit(10).lean();
+
+        ok(res, { section, subjectTeachers, announcements });
     } catch (e) { err(res, e); }
 };

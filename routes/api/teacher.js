@@ -54,6 +54,7 @@ router.get('/modules', guard, async (req, res) => {
             payroll:      !!m.payroll,
             fees:         !!m.fees,
             chat:         !!m.chat,
+            inventory:    !!m.inventory,
             saturdayConfig: {
                 working: ls.saturdayWorking !== false,
                 mode:    ls.saturdayMode    || 'all',
@@ -65,6 +66,8 @@ router.get('/modules', guard, async (req, res) => {
 
 // ── My Section ────────────────────────────────────────────────────────────────
 router.get('/my-section',              guard, sectionCtrl.getMySection);
+router.get('/sections',                guard, sectionCtrl.getMySections);
+router.get('/sections/:sectionId',     guard, sectionCtrl.getTeacherSectionDetail);
 router.post('/announcements',          guard, sectionCtrl.createAnnouncement);
 router.delete('/announcements/:id',    guard, sectionCtrl.deleteAnnouncement);
 router.post('/monitors/assign',        guard, sectionCtrl.assignMonitor);

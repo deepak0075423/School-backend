@@ -6,6 +6,9 @@ const TeacherAttendanceRegularization = require('../models/TeacherAttendanceRegu
 const AttendanceCorrection = require('../models/AttendanceCorrection');
 const StudentProfile   = require('../models/StudentProfile');
 const ClassSection     = require('../models/ClassSection');
+const { notify, schoolAdminIds } = require('../services/notifyService');
+
+const fmtDay = d => new Date(d).toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' });
 
 const ok  = (res, d, s=200) => res.status(s).json({ success: true, data: d });
 const err = (res, e, s=500) => res.status(s).json({ success: false, message: e.message||e });
@@ -132,6 +135,12 @@ exports.adminReviewRegularization = async (req, res) => {
                 { upsert: true }
             );
         }
+        notify({
+            school: req.schoolId, sender: req.userId, senderRole: req.userRole,
+            title: newStatus === 'Approved' ? '✅ Regularization approved' : '❌ Regularization rejected',
+            body: `Your attendance regularization for ${fmtDay(request.date)} was ${low(newStatus)}.${request.adminRemarks ? `\nRemarks: ${request.adminRemarks}` : ''}`,
+            recipients: [request.teacher],
+        });
         ok(res, { ...request.toObject(), status: low(request.status) });
     } catch (e) { err(res, e); }
 };
@@ -254,7 +263,13 @@ const hhmm = () => {
     const n = new Date();
     return `${String(n.getHours()).padStart(2, '0')}:${String(n.getMinutes()).padStart(2, '0')}`;
 };
-const todayStr = () => new Date().toISOString().split('T')[0];
+// Server-LOCAL date string — toISOString() is UTC and shifts the day for TZ>0
+// (e.g. a 02:00 IST clock-in was stored under yesterday), while
+// buildSelfAttendanceMonth looks records up by the local day number.
+const todayStr = () => {
+    const d = new Date();
+    return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+};
 
 // Is this Saturday a working day under the school's leave settings?
 function saturdayWorking(day, ls = {}) {
@@ -470,6 +485,12 @@ exports.submitRegularization = async (req, res) => {
             reason: String(reason).trim(),
             status: 'Pending',
         });
+        schoolAdminIds(req.schoolId).then(admins => notify({
+            school: req.schoolId, sender: req.userId, senderRole: req.userRole,
+            title: '🕐 New attendance regularization request',
+            body: `${req.user?.name || 'A staff member'} requested regularization for ${fmtDay(reg.date)}.\nReason: ${reg.reason}`,
+            recipients: admins,
+        })).catch(() => {});
         ok(res, { ...reg.toObject(), status: low(reg.status) }, 201);
     } catch (e) { err(res, e); }
 };
@@ -653,6 +674,12 @@ exports.reviewCorrection = async (req, res) => {
                 );
             }
         }
+        notify({
+            school: req.schoolId, sender: req.userId, senderRole: req.userRole,
+            title: newStatus === 'Approved' ? '✅ Attendance correction approved' : '❌ Attendance correction rejected',
+            body: `Your attendance correction request for ${fmtDay(correction.date)} was ${low(newStatus)}.${correction.teacherRemarks ? `\nRemarks: ${correction.teacherRemarks}` : ''}`,
+            recipients: [correction.student],
+        });
         ok(res, { ...correction.toObject(), status: low(correction.status) });
     } catch (e) { err(res, e); }
 };
@@ -720,6 +747,16 @@ exports.submitStudentCorrection = async (req, res) => {
             reason: String(reason).trim(),
             status: 'Pending',
         });
+        // Tell the class teacher a correction is waiting
+        ClassSection.findById(session.section).select('classTeacher').lean().then(sec => {
+            if (!sec?.classTeacher) return;
+            notify({
+                school: req.schoolId, sender: req.userId, senderRole: req.userRole,
+                title: '📝 New attendance correction request',
+                body: `${req.user?.name || 'A student'} requested a correction for ${fmtDay(session.date)} (${record?.status || 'Not Marked'} → ${requested}).\nReason: ${String(reason).trim()}`,
+                recipients: [sec.classTeacher],
+            });
+        }).catch(() => {});
         ok(res, { ...corr.toObject(), status: low(corr.status) }, 201);
     } catch (e) { err(res, e); }
 };

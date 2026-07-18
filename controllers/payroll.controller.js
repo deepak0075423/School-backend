@@ -8,6 +8,9 @@ const Payslip                  = require('../models/Payslip');
 const User                     = require('../models/User');
 const TeacherProfile           = require('../models/TeacherProfile');
 const School                   = require('../models/School');
+const { notify }               = require('../services/notifyService');
+
+const MONTHS = ['January','February','March','April','May','June','July','August','September','October','November','December'];
 
 // ── Salary calculation ────────────────────────────────────────────────────────
 
@@ -420,6 +423,14 @@ exports.publishRun = async (req, res) => {
                 generatedBy:     req.userId,
             });
             await PayrollEntry.updateOne({ _id: entry._id }, { payslip: payslip._id });
+
+            notify({
+                school: req.schoolId, sender: req.userId, senderRole: req.userRole,
+                title: '💵 Payslip published',
+                body: `Your payslip for ${MONTHS[(run.month || 1) - 1]} ${run.year} is now available.\nNet salary: ₹${(entry.netSalary || 0).toLocaleString('en-IN')}`,
+                recipients: [entry.employee],
+                email: true,
+            });
         }
 
         logAudit(req.schoolId, req.userId, 'RUN_PUBLISHED', 'PayrollRun', run._id);

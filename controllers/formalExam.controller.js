@@ -8,6 +8,7 @@ const AcademicYear    = require('../models/AcademicYear');
 const StudentProfile  = require('../models/StudentProfile');
 const ParentProfile   = require('../models/ParentProfile');
 const User            = require('../models/User');
+const { notify, withParents } = require('../services/notifyService');
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -212,8 +213,19 @@ exports.adminApproveExam = async (req, res) => {
         exam.auditLog.push({ action: 'FINAL_APPROVED', by: req.userId, notes: req.body.notes || '' });
         await exam.save();
 
-        // Generate student results
-        generateResults(exam).catch(e => console.error('[formalExam] generateResults error:', e.message));
+        // Generate student results, then tell students + parents they're out
+        generateResults(exam)
+            .then(async () => {
+                const section = await ClassSection.findById(exam.section).select('enrolledStudents').lean();
+                const targets = await withParents((section?.enrolledStudents || []).map(String));
+                notify({
+                    school: req.schoolId, sender: req.userId, senderRole: req.userRole,
+                    title: `📊 Results published: ${exam.title}`,
+                    body: `Results for "${exam.title}" have been published. Check the Results section for your scorecard.`,
+                    recipients: targets,
+                });
+            })
+            .catch(e => console.error('[formalExam] generateResults error:', e.message));
 
         res.json({ success: true, data: exam });
     } catch (e) { res.status(500).json({ success: false, message: e.message }); }
@@ -231,6 +243,15 @@ exports.adminRejectExam = async (req, res) => {
         exam.rejectionReason = reason || '';
         exam.auditLog.push({ action: 'REJECTED', by: req.userId, notes: reason || '' });
         await exam.save();
+        ClassSection.findById(exam.section).select('classTeacher').lean().then(sec => {
+            if (!sec?.classTeacher) return;
+            notify({
+                school: req.schoolId, sender: req.userId, senderRole: req.userRole,
+                title: `❌ Exam rejected: ${exam.title}`,
+                body: `The marks for "${exam.title}" were rejected by the admin.${reason ? `\nReason: ${reason}` : ''}`,
+                recipients: [sec.classTeacher],
+            });
+        }).catch(() => {});
         res.json({ success: true, data: exam });
     } catch (e) { res.status(500).json({ success: false, message: e.message }); }
 };

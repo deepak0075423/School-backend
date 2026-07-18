@@ -15,6 +15,7 @@ const User                = require('../models/User');
 const StudentProfile      = require('../models/StudentProfile');
 const School              = require('../models/School');
 const XLSX                = require('xlsx');
+const { notify, withParents } = require('../services/notifyService');
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -586,6 +587,14 @@ exports.recordPayment = async (req, res) => {
         });
         await FeePayment.updateOne({ _id: payment._id }, { ledgerEntry: ledger._id });
 
+        withParents([studentId]).then(targets => notify({
+            school: req.schoolId, sender: req.userId, senderRole: req.userRole,
+            title: '💰 Fee payment received',
+            body: `Payment of ₹${Number(amount).toLocaleString('en-IN')} received for ${student?.name || 'student'}.\nReceipt: ${receiptNumber} (${paymentMode})`,
+            recipients: targets,
+            email: true,
+        })).catch(() => {});
+
         res.status(201).json({ success: true, data: payment });
     } catch (e) { res.status(500).json({ success: false, message: e.message }); }
 };
@@ -616,6 +625,14 @@ exports.approvePayment = async (req, res) => {
         payment.collectedBy   = req.userId;
         await payment.save();
 
+        withParents([payment.student]).then(targets => notify({
+            school: req.schoolId, sender: req.userId, senderRole: req.userRole,
+            title: '✅ Fee payment approved',
+            body: `Your payment of ₹${payment.amount.toLocaleString('en-IN')} has been approved.\nReceipt: ${receiptNumber}`,
+            recipients: targets,
+            email: true,
+        })).catch(() => {});
+
         res.json({ success: true, data: payment.toObject() });
     } catch (e) { res.status(500).json({ success: false, message: e.message }); }
 };
@@ -628,6 +645,13 @@ exports.rejectPayment = async (req, res) => {
             { new: true }
         ).lean();
         if (!payment) return res.status(404).json({ success: false, message: 'Pending payment not found' });
+        withParents([payment.student]).then(targets => notify({
+            school: req.schoolId, sender: req.userId, senderRole: req.userRole,
+            title: '❌ Fee payment rejected',
+            body: `Your payment of ₹${payment.amount.toLocaleString('en-IN')} was rejected. Please contact the school office.`,
+            recipients: targets,
+            email: true,
+        })).catch(() => {});
         res.json({ success: true, data: payment });
     } catch (e) { res.status(500).json({ success: false, message: e.message }); }
 };

@@ -32,4 +32,21 @@ async function publishNotificationCount(userId, count) {
     }
 }
 
-module.exports = { publishNotificationCount };
+// Deliver an arbitrary event to all of a user's connected sockets.
+// Rides the gateway's chat.deliver channel: { target, targetId, event, data }.
+async function publishToUser(userId, event, data) {
+    const client = _get();
+    if (!client) return;
+    try {
+        await client.publish('chat.deliver', JSON.stringify({
+            target:   'user',
+            targetId: `user:${userId.toString()}`,
+            event,
+            data,
+        }));
+    } catch (e) {
+        console.error('[redis-pub] publishToUser failed:', e.message);
+    }
+}
+
+module.exports = { publishNotificationCount, publishToUser };

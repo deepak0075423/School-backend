@@ -5,7 +5,8 @@ const User                = require('../models/User');
 const StudentProfile      = require('../models/StudentProfile');
 const ClassSection        = require('../models/ClassSection');
 const mailer              = require('../config/mailer');
-const { publishNotificationCount } = require('../utils/redisPublisher');
+const { publishNotificationCount, publishToUser } = require('../utils/redisPublisher');
+const { sendSchoolMail, emailHeaderHtml } = require('../utils/schoolMailer');
 
 // Recompute and push unread count for one user via the WebSocket Gateway
 async function _pushCount(userId) {
@@ -86,12 +87,10 @@ async function resolveRecipients({ targetType, school, classId, sectionId, targe
     }
 }
 
-function dispatchEmails({ recipients, title, body, schoolName }) {
+function dispatchEmails({ recipients, title, body, schoolName, schoolId, school }) {
     const html = `
     <div style="font-family:Arial,sans-serif;max-width:600px;margin:0 auto;color:#333">
-      <div style="background:#4f46e5;padding:20px 28px;border-radius:8px 8px 0 0">
-        <h2 style="color:#fff;margin:0;font-size:1.15rem">${schoolName}: ${title}</h2>
-      </div>
+      ${emailHeaderHtml(school || { name: schoolName }, title)}
       <div style="background:#f9fafb;padding:24px 28px;border-radius:0 0 8px 8px;border:1px solid #e5e7eb;border-top:none">
         <p style="white-space:pre-wrap;line-height:1.6;margin:0">${body}</p>
         <hr style="border:none;border-top:1px solid #e5e7eb;margin:20px 0">
@@ -101,12 +100,12 @@ function dispatchEmails({ recipients, title, body, schoolName }) {
 
     recipients.forEach(u => {
         if (!u.email) return;
-        mailer.sendMail({
-            from:    `"${schoolName}" <${process.env.SMTP_USER}>`,
+        sendSchoolMail(schoolId, {
             to:      u.email,
             subject: `[${schoolName}] ${title}`,
             html,
-        }).catch(e => console.error(`[notif-email] failed → ${u.email}: ${e.message}`));
+            fromName: schoolName,
+        });
     });
 }
 
@@ -161,16 +160,33 @@ exports.send = async (req, res) => {
                 school:       req.schoolId || null,
             }));
             await NotificationReceipt.insertMany(docs, { ordered: false }).catch(() => {});
-            // Fire-and-forget: push updated count to each recipient via the WebSocket Gateway
-            recipients.forEach(u => _pushCount(u._id));
+            // Fire-and-forget: real-time event + updated count via the WebSocket Gateway
+            const rtPayload = {
+                _id:        notification._id,
+                title:      notification.title,
+                body:       notification.body,
+                senderRole: notification.senderRole,
+                createdAt:  notification.createdAt,
+            };
+            recipients.forEach(u => {
+                publishToUser(u._id, 'notification:new', rtPayload);
+                _pushCount(u._id);
+            });
         }
 
         await Notification.findByIdAndUpdate(notification._id, { recipientCount: recipients.length });
 
         if (channels.email && recipients.length) {
             const School = require('../models/School');
-            const school = await School.findById(req.schoolId, 'name').lean();
-            dispatchEmails({ recipients, title: title.trim(), body: body.trim(), schoolName: school?.name || 'School' });
+            const school = await School.findById(req.schoolId, 'name logo').lean();
+            dispatchEmails({
+                recipients,
+                title:      title.trim(),
+                body:       body.trim(),
+                schoolName: school?.name || 'School',
+                schoolId:   req.schoolId,
+                school,
+            });
         }
 
         res.status(201).json({ success: true, data: { ...notification.toObject(), recipientCount: recipients.length } });

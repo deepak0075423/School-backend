@@ -49,20 +49,16 @@ async function sendHolidayNotification(holiday, schoolId, creatorId) {
         const dateStr   = sStr === eStr ? sStr : `${sStr} – ${eStr}`;
         const typeLabel = holiday.type.replace(/_/g, ' ');
 
-        const notif = await Notification.create({
-            title:      `Holiday: ${holiday.name}`,
-            body:       `A ${typeLabel} holiday "${holiday.name}" has been scheduled on ${dateStr}.${holiday.description ? ' ' + holiday.description : ''}`,
+        const { notify } = require('../services/notifyService');
+        notify({
+            school:     schoolId,
             sender:     creatorId,
             senderRole: 'school_admin',
-            school:     schoolId,
-            channels:   { inApp: true, email: false },
-            target:     { type: scope === 'all' ? 'all' : 'individual' },
+            title:      `🎉 Holiday: ${holiday.name}`,
+            body:       `A ${typeLabel} holiday "${holiday.name}" has been scheduled on ${dateStr}.${holiday.description ? ' ' + holiday.description : ''}`,
+            recipients,
+            includeSender: true,
         });
-
-        await NotificationReceipt.insertMany(
-            recipients.map(u => ({ notification: notif._id, recipient: u._id, school: schoolId })),
-            { ordered: false }
-        );
     } catch (e) {
         console.error('[holiday-notif]', e.message);
     }

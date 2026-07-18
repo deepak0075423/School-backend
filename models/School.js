@@ -109,11 +109,31 @@ const SchoolSchema = new mongoose.Schema({
             type: Boolean,
             default: false,
         },
+        inventory: {
+            type: Boolean,
+            default: false,
+        },
+        transport: {
+            type: Boolean,
+            default: false,
+        },
     },
     leaveSettings: {
         saturdayWorking:  { type: Boolean, default: true },
         saturdayMode:     { type: String, enum: ['all', '1_3_5', '2_4'], default: 'all' },
         saturdayHalfDay:  { type: Boolean, default: false },
+    },
+    // Per-school SMTP — when enabled, all emails for this school are sent
+    // through these credentials instead of the platform-wide transporter.
+    smtp: {
+        enabled:   { type: Boolean, default: false },
+        host:      { type: String, trim: true, default: '' },
+        port:      { type: Number, default: 587 },
+        secure:    { type: Boolean, default: false },
+        user:      { type: String, trim: true, default: '' },
+        pass:      { type: String, default: '' },
+        fromName:  { type: String, trim: true, default: '' },
+        fromEmail: { type: String, trim: true, lowercase: true, default: '' },
     },
     createdAt: {
         type: Date,

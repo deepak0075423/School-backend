@@ -8,6 +8,9 @@ const User             = require('../models/User');
 const AcademicYear     = require('../models/AcademicYear');
 const XLSX             = require('xlsx');
 const path             = require('path');
+const { notify, schoolAdminIds } = require('../services/notifyService');
+
+const fmtDate = d => new Date(d).toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' });
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -349,6 +352,13 @@ exports.adminApproveRequest = async (req, res) => {
             { teacher: app.teacher, school: req.schoolId, leaveType: app.leaveType, academicYear: ay },
             { $inc: { used: app.totalDays, pending: -app.totalDays } }
         );
+        notify({
+            school: req.schoolId, sender: req.userId, senderRole: req.userRole,
+            title: '✅ Leave request approved',
+            body: `Your leave from ${fmtDate(app.fromDate)} to ${fmtDate(app.toDate)} (${app.totalDays} day${app.totalDays === 1 ? '' : 's'}) has been approved.${app.adminComment ? `\nComment: ${app.adminComment}` : ''}`,
+            recipients: [app.teacher],
+            email: true,
+        });
         res.json({ success: true, data: app });
     } catch (e) { res.status(500).json({ success: false, message: e.message }); }
 };
@@ -375,6 +385,13 @@ exports.adminRejectRequest = async (req, res) => {
                 { $inc: { pending: -app.totalDays } }
             );
         }
+        notify({
+            school: req.schoolId, sender: req.userId, senderRole: req.userRole,
+            title: '❌ Leave request rejected',
+            body: `Your leave from ${fmtDate(app.fromDate)} to ${fmtDate(app.toDate)} has been rejected.${app.adminComment ? `\nReason: ${app.adminComment}` : ''}`,
+            recipients: [app.teacher],
+            email: true,
+        });
         res.json({ success: true, data: app });
     } catch (e) { res.status(500).json({ success: false, message: e.message }); }
 };
@@ -391,6 +408,12 @@ exports.adminRequestModification = async (req, res) => {
         app.modificationRequestedAt = new Date();
         app.adminComment = adminComment || '';
         await app.save();
+        notify({
+            school: req.schoolId, sender: req.userId, senderRole: req.userRole,
+            title: '✏️ Leave request needs changes',
+            body: `Your leave from ${fmtDate(app.fromDate)} to ${fmtDate(app.toDate)} needs modification.${app.adminComment ? `\nComment: ${app.adminComment}` : ''}`,
+            recipients: [app.teacher],
+        });
         res.json({ success: true, data: app });
     } catch (e) { res.status(500).json({ success: false, message: e.message }); }
 };
@@ -921,6 +944,12 @@ exports.teacherApplyLeave = async (req, res) => {
             { teacher: req.userId, school: req.schoolId, leaveType: leaveTypeId, academicYear: ay },
             { $inc: { pending: totalDays } }
         );
+        schoolAdminIds(req.schoolId).then(admins => notify({
+            school: req.schoolId, sender: req.userId, senderRole: req.userRole,
+            title: '📋 New leave request',
+            body: `${req.user?.name || 'A teacher'} applied for ${lt.name} leave from ${fmtDate(from)} to ${fmtDate(to)} (${totalDays} day${totalDays === 1 ? '' : 's'}).\nReason: ${reason}`,
+            recipients: admins,
+        })).catch(() => {});
         res.status(201).json({ success: true, data: app });
     } catch (e) {
         if (e.code === 11000) return res.status(400).json({ success: false, message: 'You already have a leave application for these dates' });
@@ -948,6 +977,12 @@ exports.teacherCancelLeave = async (req, res) => {
                 { $inc: { pending: -app.totalDays } }
             );
         }
+        schoolAdminIds(req.schoolId).then(admins => notify({
+            school: req.schoolId, sender: req.userId, senderRole: req.userRole,
+            title: '🚫 Leave request cancelled',
+            body: `${req.user?.name || 'A teacher'} cancelled their leave request for ${fmtDate(app.fromDate)} – ${fmtDate(app.toDate)}.`,
+            recipients: admins,
+        })).catch(() => {});
         res.json({ success: true, data: app });
     } catch (e) { res.status(500).json({ success: false, message: e.message }); }
 };

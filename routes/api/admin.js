@@ -36,6 +36,9 @@ router.get('/designations', guard, adminCtrl.getDesignations);
 router.put('/designations', guard, adminCtrl.updateDesignations);
 router.get('/school-settings', guard, adminCtrl.getSchoolSettings);
 router.put('/school-settings', guard, uploadImage.single('logo'), adminCtrl.updateSchoolSettings);
+router.get('/smtp-settings',  guard, adminCtrl.getSmtpSettings);
+router.put('/smtp-settings',  guard, adminCtrl.updateSmtpSettings);
+router.post('/smtp-settings/test', guard, adminCtrl.testSmtp);
 
 // Modules — returns enabled module flags for the current school
 router.get('/modules', guard, async (req, res) => {
@@ -56,6 +59,7 @@ router.get('/modules', guard, async (req, res) => {
             payroll:      !!m.payroll,
             fees:         !!m.fees,
             chat:         !!m.chat,
+            inventory:    !!m.inventory,
             saturdayConfig: {
                 working: ls.saturdayWorking !== false,
                 mode:    ls.saturdayMode    || 'all',

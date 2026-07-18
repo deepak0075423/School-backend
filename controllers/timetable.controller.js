@@ -206,6 +206,25 @@ exports.adminSaveEntries = async (req, res) => {
         await TimetableEntry.deleteMany({ timetable: tt._id });
         if (toInsert.length) await TimetableEntry.insertMany(toInsert);
 
+        // Notify the section's students + assigned teachers about the update
+        setImmediate(async () => {
+            try {
+                const ClassSection = require('../models/ClassSection');
+                const { notify } = require('../services/notifyService');
+                const sec = await ClassSection.findById(sectionId)
+                    .populate('class', 'className').select('sectionName class enrolledStudents').lean();
+                if (!sec) return;
+                const label      = `${sec.class?.className || ''} ${sec.sectionName || ''}`.trim();
+                const teacherIds = [...new Set(toInsert.map(e => e.teacher?.toString()).filter(Boolean))];
+                notify({
+                    school: req.schoolId, sender: req.userId, senderRole: req.userRole,
+                    title: '🗓️ Timetable updated',
+                    body: `The timetable for ${label || 'your section'} has been updated. Check the new schedule.`,
+                    recipients: [...(sec.enrolledStudents || []), ...teacherIds],
+                });
+            } catch (e) { console.error('[timetable-notif]', e.message); }
+        });
+
         ok(res, { saved: toInsert.length, conflicts, timetableId: tt._id });
     } catch (e) { err(res, e); }
 };

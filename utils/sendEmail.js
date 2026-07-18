@@ -1,4 +1,5 @@
 const transporter = require('../config/mailer');
+const { sendSchoolMail, emailHeaderHtml, getMailContext } = require('./schoolMailer');
 
 const sendWelcomeEmail = async ({ to, name, email, tempPassword, role, schoolName }) => {
   const loginUrl = `${process.env.APP_URL}/auth/login`;
@@ -169,7 +170,8 @@ const sendOtpEmail = async ({ to, name, otp }) => {
 /* ─────────────────────────────────────────────
    ATTENDANCE NOTIFICATION — sent to parents
 ─────────────────────────────────────────────── */
-const sendAttendanceNotification = async ({ to, parentName, studentName, date, status, schoolName }) => {
+const sendAttendanceNotification = async ({ to, parentName, studentName, date, status, schoolName, schoolId = null }) => {
+    const { school } = await getMailContext(schoolId).catch(() => ({ school: null }));
     const isPresent = status === 'Present';
     const isLate = status === 'Late';
     const statusColor = isPresent ? '#10b981' : isLate ? '#f59e0b' : '#ef4444';
@@ -212,10 +214,7 @@ const sendAttendanceNotification = async ({ to, parentName, studentName, date, s
 </head>
 <body>
 <div class="wrapper">
-  <div class="header">
-    <h1>🎓 ${process.env.APP_NAME}</h1>
-    <p>${schoolName || 'Attendance Notification'}</p>
-  </div>
+  ${emailHeaderHtml(school, schoolName || 'Attendance Notification')}
   <div class="body">
     <p style="color:#374151; font-size:15px; margin-bottom:20px;">Dear <strong>${parentName}</strong>,</p>
     <div class="status-box">
@@ -246,23 +245,18 @@ const sendAttendanceNotification = async ({ to, parentName, studentName, date, s
 </body>
 </html>`;
 
-    try {
-        await transporter.sendMail({
-            from: process.env.EMAIL_FROM,
-            to,
-            subject: `${statusIcon} Attendance Update: ${studentName} is ${status} — ${formattedDate}`,
-            html,
-        });
-        console.log(`📧 Attendance notification sent to ${to}`);
-    } catch (err) {
-        console.error(`❌ Attendance email failed for ${to}:`, err.message);
-    }
+    await sendSchoolMail(schoolId, {
+        to,
+        subject: `${statusIcon} Attendance Update: ${studentName} is ${status} — ${formattedDate}`,
+        html,
+        fromName: schoolName || undefined,
+    });
 };
 
 /* ─────────────────────────────────────────────
    NOTIFICATION EMAIL — sent to any recipient
 ─────────────────────────────────────────────── */
-const sendNotificationEmail = async ({ to, recipientName, title, body, senderRole }) => {
+const sendNotificationEmail = async ({ to, recipientName, title, body, senderRole, schoolId = null }) => {
     const roleLabel = {
         super_admin:  'Super Admin',
         school_admin: 'School Admin',
@@ -291,7 +285,7 @@ const sendNotificationEmail = async ({ to, recipientName, title, body, senderRol
 <body>
 <div class="wrapper">
   <div class="header">
-    <h1>🎓 ${process.env.APP_NAME || 'School Management'}</h1>
+    <h1>🎓 ${process.env.APP_NAME || 'Aksharum'}</h1>
     <p>You have a new notification</p>
   </div>
   <div class="body">
@@ -304,7 +298,7 @@ const sendNotificationEmail = async ({ to, recipientName, title, body, senderRol
     </div>
     <div class="message-body">${body}</div>
     <div class="footer">
-      This is an automated notification from ${process.env.APP_NAME || 'School Management System'}.<br/>
+      This is an automated notification from ${process.env.APP_NAME || 'Aksharum'}.<br/>
       Please do not reply to this email.
     </div>
   </div>
@@ -312,11 +306,11 @@ const sendNotificationEmail = async ({ to, recipientName, title, body, senderRol
 </body>
 </html>`;
 
-    await transporter.sendMail({
-        from:    `"${process.env.APP_NAME || 'School'}" <${process.env.EMAIL_FROM}>`,
+    await sendSchoolMail(schoolId, {
         to,
         subject: `[Notification] ${title}`,
         html,
+        rethrow: true,
     });
 };
 

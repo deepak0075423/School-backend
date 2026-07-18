@@ -11,6 +11,8 @@ const Class          = require('../models/Class');
 const AcademicYear   = require('../models/AcademicYear');
 const School         = require('../models/School');
 const mailer         = require('../config/mailer');
+const { sendSchoolMail, emailHeaderHtml, getMailContext, invalidate: invalidateMailer } = require('../utils/schoolMailer');
+const { notify } = require('../services/notifyService');
 
 // Generates a random 10-char one-time password, avoiding visually confusing chars
 const generateOTP = () => {
@@ -18,13 +20,13 @@ const generateOTP = () => {
     return Array.from({ length: 10 }, () => chars[Math.floor(Math.random() * chars.length)]).join('');
 };
 
-const sendWelcomeEmail = (to, name, email, otp, schoolName) => {
+const sendWelcomeEmail = (to, name, email, otp, schoolName, schoolId = null) => {
     const loginUrl = `${process.env.FRONTEND_URL || 'http://localhost:3000'}/login`;
+    // Fetch branding (logo) then send through the school's own SMTP when configured
+    getMailContext(schoolId).then(({ school }) => {
     const html = `
     <div style="font-family:Arial,sans-serif;max-width:600px;margin:0 auto;color:#333">
-      <div style="background:#4f46e5;padding:24px 32px;border-radius:8px 8px 0 0">
-        <h1 style="color:#fff;margin:0;font-size:1.4rem">Welcome to ${schoolName}!</h1>
-      </div>
+      ${emailHeaderHtml(school, `Welcome to ${schoolName}!`)}
       <div style="background:#f9fafb;padding:28px 32px;border-radius:0 0 8px 8px;border:1px solid #e5e7eb;border-top:none">
         <p style="margin-top:0">Hi <strong>${name}</strong>,</p>
         <p>Your school account has been created. Use the one-time credentials below to log in for the first time:</p>
@@ -52,13 +54,13 @@ const sendWelcomeEmail = (to, name, email, otp, schoolName) => {
         </p>
       </div>
     </div>`;
-    mailer.sendMail({
-        from: `"${schoolName}" <${process.env.SMTP_USER}>`,
+    sendSchoolMail(schoolId, {
         to,
         subject: `Your ${schoolName} account is ready — action required`,
         html,
-    }).then(info => console.log(`[email] welcome sent to ${to} — ${info.messageId}`))
-      .catch(err => console.error(`[email] failed to send to ${to}:`, err.message));
+        fromName: schoolName,
+    });
+    }).catch(err => console.error(`[email] welcome failed for ${to}:`, err.message));
 };
 
 const jsonOk  = (res, data, status = 200) => res.status(status).json({ success: true,  data });
@@ -207,7 +209,7 @@ exports.updateStudentFull = async (req, res) => {
                 const parent = await createUserHelper({ name: newParent.name, email: newParent.email, phone: newParent.phone || '', password: parentOtp }, 'parent', req.schoolId);
                 resolvedParentId = parent._id;
                 const schoolName = req.user?.school?.name || 'School';
-                sendWelcomeEmail(newParent.email, newParent.name, newParent.email, parentOtp, schoolName);
+                sendWelcomeEmail(newParent.email, newParent.name, newParent.email, parentOtp, schoolName, req.schoolId);
             }
         }
 
@@ -283,7 +285,7 @@ exports.createTeacher = async (req, res) => {
         const user = await createUserHelper({ name, email, phone, designation, password: otp }, 'teacher', req.schoolId);
         await TeacherProfile.create({ user: user._id, school: req.schoolId, designation: designation || '' });
         const schoolName = req.user?.school?.name || 'School';
-        sendWelcomeEmail(email, name, email, otp, schoolName);
+        sendWelcomeEmail(email, name, email, otp, schoolName, req.schoolId);
         jsonOk(res, user, 201);
     } catch (err) { jsonErr(res, err, 400); }
 };
@@ -310,7 +312,7 @@ exports.createStudent = async (req, res) => {
                 const parentOtp = generateOTP();
                 const parent = await createUserHelper({ name: newParent.name, email: newParent.email, phone: newParent.phone || '', password: parentOtp }, 'parent', req.schoolId);
                 resolvedParentId = parent._id;
-                sendWelcomeEmail(newParent.email, newParent.name, newParent.email, parentOtp, schoolName);
+                sendWelcomeEmail(newParent.email, newParent.name, newParent.email, parentOtp, schoolName, req.schoolId);
             }
         }
 
@@ -319,7 +321,7 @@ exports.createStudent = async (req, res) => {
         const profileData = { user: user._id, school: req.schoolId, ...profile };
         if (resolvedParentId) profileData.parent = resolvedParentId;
         await StudentProfile.create(profileData);
-        sendWelcomeEmail(email, name, email, otp, schoolName);
+        sendWelcomeEmail(email, name, email, otp, schoolName, req.schoolId);
         jsonOk(res, user, 201);
     } catch (err) { jsonErr(res, err, 400); }
 };
@@ -329,7 +331,7 @@ exports.createAdmin = async (req, res) => {
         const otp = generateOTP();
         const user = await createUserHelper({ ...req.body, password: otp }, 'school_admin', req.schoolId);
         const schoolName = req.user?.school?.name || 'School';
-        sendWelcomeEmail(req.body.email, req.body.name, req.body.email, otp, schoolName);
+        sendWelcomeEmail(req.body.email, req.body.name, req.body.email, otp, schoolName, req.schoolId);
         jsonOk(res, user, 201);
     } catch (err) { jsonErr(res, err, 400); }
 };
@@ -539,14 +541,14 @@ exports.bulkStudents = async (req, res) => {
                 const parentUser = await createUserHelper({ name: parentName, email: parentEmail, phone: parentPhone, password: parentOtp }, 'parent', req.schoolId);
                 await ParentProfile.create({ user: parentUser._id, school: req.schoolId });
                 parentUserId = parentUser._id;
-                sendWelcomeEmail(parentEmail, parentName, parentEmail, parentOtp, schoolName);
+                sendWelcomeEmail(parentEmail, parentName, parentEmail, parentOtp, schoolName, req.schoolId);
             }
 
             const otp = generateOTP();
             const studentUser = await createUserHelper({ name, email, phone, password: otp }, 'student', req.schoolId);
             await StudentProfile.create({ user: studentUser._id, school: req.schoolId, admissionNumber: admNo, dob, gender, bloodGroup, category, address, currentSection: section._id, parent: parentUserId });
             await ParentProfile.findOneAndUpdate({ user: parentUserId }, { $addToSet: { children: studentUser._id } });
-            sendWelcomeEmail(email, name, email, otp, schoolName);
+            sendWelcomeEmail(email, name, email, otp, schoolName, req.schoolId);
 
             created++;
             push({ type: 'row_done', row: rowNum, name, success: true });
@@ -687,4 +689,83 @@ exports.updateSchoolSettings = async (req, res) => {
         ).lean();
         res.json({ success: true, data: school });
     } catch (e) { jsonErr(res, e); }
+};
+
+// ── SMTP Settings (per-school outgoing mail) ──────────────────────────────────
+
+exports.getSmtpSettings = async (req, res) => {
+    try {
+        const school = await School.findById(req.schoolId).select('smtp').lean();
+        const smtp = school?.smtp || {};
+        // Never return the stored password — only whether one is set
+        jsonOk(res, {
+            enabled:     !!smtp.enabled,
+            host:        smtp.host      || '',
+            port:        smtp.port      || 587,
+            secure:      !!smtp.secure,
+            user:        smtp.user      || '',
+            fromName:    smtp.fromName  || '',
+            fromEmail:   smtp.fromEmail || '',
+            hasPassword: !!smtp.pass,
+        });
+    } catch (e) { jsonErr(res, e); }
+};
+
+exports.updateSmtpSettings = async (req, res) => {
+    try {
+        const { enabled, host, port, secure, user, pass, fromName, fromEmail } = req.body;
+        const update = {
+            'smtp.enabled':   !!enabled,
+            'smtp.host':      (host      || '').trim(),
+            'smtp.port':      Number(port) || 587,
+            'smtp.secure':    !!secure,
+            'smtp.user':      (user      || '').trim(),
+            'smtp.fromName':  (fromName  || '').trim(),
+            'smtp.fromEmail': (fromEmail || '').trim().toLowerCase(),
+        };
+        // Blank password means "keep the existing one"
+        if (pass) update['smtp.pass'] = pass;
+
+        if (update['smtp.enabled'] && (!update['smtp.host'] || !update['smtp.user'])) {
+            return res.status(400).json({ success: false, message: 'Host and username are required to enable SMTP' });
+        }
+
+        const school = await School.findByIdAndUpdate(req.schoolId, update, { new: true, select: 'smtp' }).lean();
+        if (update['smtp.enabled'] && !school.smtp?.pass) {
+            await School.findByIdAndUpdate(req.schoolId, { 'smtp.enabled': false });
+            return res.status(400).json({ success: false, message: 'Password is required to enable SMTP' });
+        }
+
+        invalidateMailer(req.schoolId);
+        jsonOk(res, { saved: true });
+    } catch (e) { jsonErr(res, e); }
+};
+
+exports.testSmtp = async (req, res) => {
+    try {
+        const to = (req.body.to || req.user?.email || '').trim();
+        if (!to) return res.status(400).json({ success: false, message: 'Recipient email is required' });
+
+        const school = await School.findById(req.schoolId).select('name smtp logo').lean();
+        if (!school?.smtp?.enabled) {
+            return res.status(400).json({ success: false, message: 'Enable and save SMTP settings before testing' });
+        }
+
+        await sendSchoolMail(req.schoolId, {
+            to,
+            subject: `SMTP test — ${school.name}`,
+            html: `
+            <div style="font-family:Arial,sans-serif;max-width:600px;margin:0 auto;color:#333">
+              ${emailHeaderHtml(school, 'SMTP configuration test')}
+              <div style="background:#f9fafb;padding:24px 28px;border-radius:0 0 12px 12px;border:1px solid #e5e7eb;border-top:none">
+                <p style="margin-top:0">✅ Your school's SMTP settings are working.</p>
+                <p style="color:#6b7280;font-size:.85rem;margin-bottom:0">All emails for <strong>${school.name}</strong> will now be sent through this mailbox.</p>
+              </div>
+            </div>`,
+            rethrow: true,
+        });
+        jsonOk(res, { sent: true, to });
+    } catch (e) {
+        res.status(502).json({ success: false, message: `Test email failed: ${e.message}` });
+    }
 };
