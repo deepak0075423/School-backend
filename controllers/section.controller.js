@@ -20,6 +20,8 @@ exports.getMySection = async (req, res) => {
 };
 exports.createAnnouncement = async (req, res) => {
     try {
+        if (!req.body.title?.trim() && !req.body.message?.trim() && !req.body.content?.trim())
+            return err(res, 'Announcement text is required', 400);
         const mySection = await ClassSection.findOne({ classTeacher: req.userId, school: req.schoolId }).lean();
         const ann = await ClassAnnouncement.create({
             section: mySection?._id, createdBy: req.userId, school: req.schoolId, ...req.body,

@@ -17,6 +17,8 @@ exports.getSubjects = async (req, res) => {
 exports.createSubject = async (req, res) => {
     try {
         const { name, subjectName, code, subjectCode, type, description, teachers } = req.body;
+        if (!(subjectName || name)?.trim()) return err(res, 'Subject name is required', 400);
+        if (type && !['theory', 'practical', 'elective'].includes(type)) return err(res, 'Subject type must be theory, practical or elective', 400);
         const s = await Subject.create({
             subjectName: subjectName || name,
             subjectCode: subjectCode || code || null,

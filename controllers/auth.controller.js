@@ -3,6 +3,7 @@ const bcrypt  = require('bcryptjs');
 const jwt     = require('jsonwebtoken');
 const crypto  = require('crypto');
 const User    = require('../models/User');
+const { isEmail, passwordError } = require('../utils/validators');
 
 const signToken = (userId) =>
     jwt.sign({ userId }, process.env.JWT_SECRET, { expiresIn: process.env.JWT_EXPIRES_IN || '7d' });
@@ -69,9 +70,8 @@ exports.refreshToken = async (req, res) => {
 exports.resetPassword = async (req, res) => {
     try {
         const { currentPassword, newPassword } = req.body;
-        if (!newPassword || newPassword.length < 8) {
-            return res.status(400).json({ success: false, message: 'New password must be at least 8 characters' });
-        }
+        const pwErr = passwordError(newPassword);
+        if (pwErr) return res.status(400).json({ success: false, message: pwErr });
         const user = await User.findById(req.userId);
         if (!user) return res.status(404).json({ success: false, message: 'User not found' });
         // First-login: OTP already verified by login — skip current password check
@@ -95,7 +95,8 @@ exports.resetPassword = async (req, res) => {
 exports.forgotPassword = async (req, res) => {
     try {
         const { email } = req.body;
-        const user = await User.findOne({ email: email?.toLowerCase() });
+        if (!isEmail(email)) return res.status(400).json({ success: false, message: 'A valid email address is required' });
+        const user = await User.findOne({ email: email.toLowerCase() });
         if (!user) {
             return res.json({ success: true, message: 'If that email exists, an OTP was sent' });
         }
@@ -134,6 +135,9 @@ exports.verifyOtp = async (req, res) => {
 exports.newPassword = async (req, res) => {
     try {
         const { resetToken, password } = req.body;
+        if (!resetToken) return res.status(400).json({ success: false, message: 'Reset token is required' });
+        const pwErr = passwordError(password);
+        if (pwErr) return res.status(400).json({ success: false, message: pwErr });
         const user = await User.findOne({ resetToken });
         if (!user) return res.status(400).json({ success: false, message: 'Invalid reset token' });
         user.password         = await bcrypt.hash(password, 12);

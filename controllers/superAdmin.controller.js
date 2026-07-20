@@ -13,6 +13,7 @@ const Class           = require('../models/Class');
 const AcademicYear    = require('../models/AcademicYear');
 const mailer  = require('../config/mailer');
 const { sendSchoolMail, emailHeaderHtml, getMailContext } = require('../utils/schoolMailer');
+const { validate, passwordError } = require('../utils/validators');
 
 const generateOTP = () => {
     const chars = 'ABCDEFGHJKMNPQRSTUVWXYZabcdefghjkmnpqrstuvwxyz23456789';
@@ -100,13 +101,19 @@ exports.getSchool = async (req, res) => {
     } catch (err) { res.status(500).json({ success: false, message: err.message }); }
 };
 
+const SCHOOL_BOARDS = ['CBSE', 'ICSE', 'State Board', 'IB', 'Cambridge (IGCSE)', 'NIOS', 'Other'];
+
 const _validateSchool = (body) => {
-    const required = { name: 'School Name', code: 'School Code', email: 'Email', phone: 'Phone', address: 'Address', city: 'City', state: 'State', country: 'Country' };
+    const required = { name: 'School Name', code: 'School Code', board: 'School Board', email: 'Email', phone: 'Phone', address: 'Address', city: 'City', state: 'State', country: 'Country' };
     for (const [field, label] of Object.entries(required)) {
         if (!body[field] || !String(body[field]).trim()) return `${label} is required`;
     }
+    if (!SCHOOL_BOARDS.includes(body.board)) return 'School Board must be one of: ' + SCHOOL_BOARDS.join(', ');
     if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(body.email)) return 'Valid email is required';
     if (!/^\d{7,15}$/.test(body.phone.replace(/[\s\-+()]/g, ''))) return 'Valid phone number is required';
+    if (body.website && !/^https?:\/\/.+\..+/.test(body.website)) return 'Website must be a valid URL starting with http:// or https://';
+    if (String(body.name).trim().length < 3) return 'School Name must be at least 3 characters';
+    if (!/^[A-Za-z0-9_-]{2,20}$/.test(String(body.code).trim())) return 'School Code must be 2-20 letters, numbers, hyphens or underscores';
     return null;
 };
 
@@ -173,10 +180,22 @@ exports.getUser = async (req, res) => {
     } catch (err) { res.status(500).json({ success: false, message: err.message }); }
 };
 
+const USER_ROLES = ['super_admin', 'school_admin', 'teacher', 'student', 'parent'];
+
 exports.createUser = async (req, res) => {
     try {
         const { name, email, role } = req.body;
+        const err = validate(req.body, {
+            name:  { label: 'Name', required: true, minLen: 2 },
+            email: { label: 'Email', required: true, type: 'email' },
+            role:  { label: 'Role', required: true, enum: USER_ROLES },
+        });
+        if (err) return res.status(400).json({ success: false, message: err });
         const school = (req.body.school && req.body.school !== '') ? req.body.school : null;
+        if (role !== 'super_admin' && !school)
+            return res.status(400).json({ success: false, message: 'School is required for this role' });
+        const exists = await User.findOne({ email: email.toLowerCase() });
+        if (exists) return res.status(400).json({ success: false, message: 'Email already registered' });
         const otp    = generateOTP();
         const user   = await User.create({
             name,
@@ -194,9 +213,20 @@ exports.createUser = async (req, res) => {
 exports.updateUser = async (req, res) => {
     try {
         const { name, role, password } = req.body;
+        const err = validate(req.body, {
+            name: { label: 'Name', required: true, minLen: 2 },
+            role: { label: 'Role', required: true, enum: USER_ROLES },
+        });
+        if (err) return res.status(400).json({ success: false, message: err });
         const school = (req.body.school && req.body.school !== '') ? req.body.school : null;
+        if (role !== 'super_admin' && !school)
+            return res.status(400).json({ success: false, message: 'School is required for this role' });
         const update = { name, role, school: (role === 'super_admin') ? null : school };
-        if (password) update.password = await bcrypt.hash(password, 12);
+        if (password) {
+            const pwErr = passwordError(password);
+            if (pwErr) return res.status(400).json({ success: false, message: pwErr });
+            update.password = await bcrypt.hash(password, 12);
+        }
         const user = await User.findByIdAndUpdate(req.params.id, update, { new: true });
         if (!user) return res.status(404).json({ success: false, message: 'User not found' });
         res.json({ success: true, data: user });

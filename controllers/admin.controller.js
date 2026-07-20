@@ -13,6 +13,7 @@ const School         = require('../models/School');
 const mailer         = require('../config/mailer');
 const { sendSchoolMail, emailHeaderHtml, getMailContext, invalidate: invalidateMailer } = require('../utils/schoolMailer');
 const { notify } = require('../services/notifyService');
+const { validate, isEmail, isPhone, isURL } = require('../utils/validators');
 
 // Generates a random 10-char one-time password, avoiding visually confusing chars
 const generateOTP = () => {
@@ -328,6 +329,15 @@ exports.createStudent = async (req, res) => {
 
 exports.createAdmin = async (req, res) => {
     try {
+        const err = validate(req.body, {
+            name:  { label: 'Full name', required: true, minLen: 2 },
+            email: { label: 'Email', required: true, type: 'email' },
+            phone: { label: 'Phone', type: 'phone' },
+        });
+        if (err) return res.status(400).json({ success: false, message: err });
+        const exists = await User.findOne({ email: req.body.email.toLowerCase() });
+        if (exists) return res.status(400).json({ success: false, message: 'Email already registered' });
+
         const otp = generateOTP();
         const user = await createUserHelper({ ...req.body, password: otp }, 'school_admin', req.schoolId);
         const schoolName = req.user?.school?.name || 'School';
@@ -668,6 +678,12 @@ exports.getSchoolSettings = async (req, res) => {
 exports.updateSchoolSettings = async (req, res) => {
     try {
         const { code, email, phone, website } = req.body;
+        const err = validate(req.body, {
+            email:   { label: 'Email', type: 'email' },
+            phone:   { label: 'Phone', type: 'phone' },
+            website: { label: 'Website', type: 'url' },
+        });
+        if (err) return res.status(400).json({ success: false, message: err });
         const update = {};
         if (code    !== undefined) update.code    = (code    || '').trim();
         if (email   !== undefined) update.email   = (email   || '').trim().toLowerCase();
@@ -714,6 +730,11 @@ exports.getSmtpSettings = async (req, res) => {
 exports.updateSmtpSettings = async (req, res) => {
     try {
         const { enabled, host, port, secure, user, pass, fromName, fromEmail } = req.body;
+        const err = validate(req.body, {
+            port:      { label: 'SMTP port', type: 'number', min: 1, max: 65535 },
+            fromEmail: { label: 'From email', type: 'email' },
+        });
+        if (err) return res.status(400).json({ success: false, message: err });
         const update = {
             'smtp.enabled':   !!enabled,
             'smtp.host':      (host      || '').trim(),

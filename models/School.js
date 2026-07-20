@@ -42,6 +42,12 @@ const SchoolSchema = new mongoose.Schema({
         trim: true,
         default: 'India',
     },
+    // Education board the school is affiliated with (CBSE, ICSE, …)
+    board: {
+        type: String,
+        trim: true,
+        default: '',
+    },
     website: {
         type: String,
         default: '',

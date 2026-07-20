@@ -4,6 +4,7 @@ const Class          = require('../models/Class');
 const ClassSection   = require('../models/ClassSection');
 const StudentProfile = require('../models/StudentProfile');
 const User           = require('../models/User');
+const { isDate }     = require('../utils/validators');
 
 const ok  = (res, data, status = 200) => res.status(status).json({ success: true, data });
 const err = (res, e, status = 500)    => res.status(status).json({ success: false, message: e.message || e });
@@ -18,6 +19,10 @@ exports.getAcademicYears = async (req, res) => {
 exports.createAcademicYear = async (req, res) => {
     try {
         const { name, yearName, startDate, endDate } = req.body;
+        if (!(yearName || name)?.trim()) return err(res, 'Year name is required', 400);
+        if (!startDate || !isDate(startDate)) return err(res, 'A valid start date is required', 400);
+        if (!endDate   || !isDate(endDate))   return err(res, 'A valid end date is required', 400);
+        if (new Date(endDate) <= new Date(startDate)) return err(res, 'End date must be after start date', 400);
         const year = await AcademicYear.create({
             yearName: yearName || name,
             startDate, endDate,
@@ -30,6 +35,9 @@ exports.createAcademicYear = async (req, res) => {
 exports.updateAcademicYear = async (req, res) => {
     try {
         const { name, yearName, startDate, endDate } = req.body;
+        if (startDate && !isDate(startDate)) return err(res, 'Start date is invalid', 400);
+        if (endDate   && !isDate(endDate))   return err(res, 'End date is invalid', 400);
+        if (startDate && endDate && new Date(endDate) <= new Date(startDate)) return err(res, 'End date must be after start date', 400);
         const update = { startDate, endDate };
         if (yearName || name) update.yearName = yearName || name;
         const year = await AcademicYear.findByIdAndUpdate(req.params.id, update, { new: true });
@@ -88,6 +96,10 @@ exports.getClasses = async (req, res) => {
 exports.createClass = async (req, res) => {
     try {
         const { name, className, classNumber, level, academicYear } = req.body;
+        if (!(className || name)?.trim()) return err(res, 'Class name is required', 400);
+        const num = classNumber ?? level;
+        if (num !== undefined && num !== null && num !== '' && (Number.isNaN(Number(num)) || Number(num) < 0))
+            return err(res, 'Class number must be a non-negative number', 400);
         let yearId = academicYear;
         if (!yearId) {
             const active = await AcademicYear.findOne({ school: req.schoolId, status: 'active' });
@@ -248,6 +260,10 @@ exports.createSection = async (req, res) => {
     try {
         const cls = await Class.findById(req.params.classId).lean();
         const { name, sectionName, capacity, maxStudents } = req.body;
+        if (!(sectionName || name)?.trim()) return err(res, 'Section name is required', 400);
+        const cap = maxStudents || capacity;
+        if (cap !== undefined && cap !== null && cap !== '' && (Number.isNaN(Number(cap)) || Number(cap) < 1))
+            return err(res, 'Capacity must be a positive number', 400);
         const section = await ClassSection.create({
             sectionName: sectionName || name,
             maxStudents: maxStudents || capacity || 40,
